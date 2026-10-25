@@ -1,63 +1,61 @@
-import { stateToView, type OverlayState } from './view.js';
+import { parseOverlayQuery } from './query.js';
+import { OverlayRenderer } from './render.js';
+import type { OverlayState } from './view.js';
 
 const root = document.querySelector<HTMLElement>('#app');
+const query = parseOverlayQuery(location.search);
+const renderer = root ? new OverlayRenderer(root, query) : null;
 let state: OverlayState | null = null;
 let receivedAt = Date.now();
 let retryMs = 500;
 let socket: WebSocket | null = null;
-let verdictSince = 0;
+let connected = false;
 
 function connect(): void {
-  const params = new URLSearchParams(location.search);
-  const token = params.get('token');
+  if (query.demo) return;
+  const token = new URLSearchParams(location.search).get('token');
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${protocol}//${location.host}/ws/overlay${token ? `?token=${encodeURIComponent(token)}` : ''}`);
-  socket.onopen = () => { retryMs = 500; };
+  socket.onopen = () => { retryMs = 500; connected = true; };
   socket.onmessage = (event) => {
-    try {
-      state = JSON.parse(event.data) as OverlayState;
-      receivedAt = Date.now();
-      render();
-    } catch { /* ignore bad state payloads */ }
+    try { state = JSON.parse(event.data) as OverlayState; receivedAt = Date.now(); }
+    catch { /* Ignore malformed state payloads and keep the last good render. */ }
   };
-  socket.onclose = () => { setTimeout(connect, retryMs); retryMs = Math.min(10_000, retryMs * 2); };
+  socket.onclose = () => {
+    connected = false;
+    window.setTimeout(connect, retryMs);
+    retryMs = Math.min(10_000, retryMs * 2);
+  };
   socket.onerror = () => socket?.close();
 }
 
-function render(): void {
-  if (!root || !state) return;
-  const view = stateToView(state, Date.now());
-  const elapsed = Date.now() - receivedAt;
-  const remaining = Math.max(0, view.remainingMs - (view.mode === 'active' ? 0 : elapsed));
-  const seconds = remaining / 1000;
-  if (view.mode === 'idle') {
-    root.innerHTML = `<div class="badge">${escape(view.label)}</div>`;
-    return;
-  }
-  if (view.mode === 'queued') {
-    root.innerHTML = `<div class="toast">🎯 ${escape(view.viewer)} queued: ${escape(view.title)}</div>`;
-    return;
-  }
-  if (view.mode === 'poll') {
-    root.innerHTML = `<div class="bar">🗳️ Chat is voting… ${seconds.toFixed(1)}s</div>`;
-    return;
-  }
-  if (view.mode === 'appeal') {
-    root.innerHTML = `<div class="bar">!appeal ${escape(view.appeals)} · ${seconds.toFixed(1)}s</div>`;
-    return;
-  }
-  if (view.mode === 'verdict') {
-    const pass = view.label.includes('PASS');
-    if (!verdictSince) verdictSince = Date.now();
-    const held = Date.now() - verdictSince < 4000;
-    root.innerHTML = `<div class="stamp ${pass ? 'pass' : 'fail'} ${view.label.startsWith('FINAL') ? 'final' : ''}">${pass ? '✓ PASS' : '✕ FAIL'}</div>${held ? '' : view.clipUrl ? `<a class="clip" href="${escape(view.clipUrl)}" target="_blank">Clip receipt ↗</a>` : ''}`;
-    return;
-  }
-  verdictSince = 0;
-  const bounty = state.current ? state.current.bountyBits ? `${state.current.bountyBits} bits` : `${state.current.bountyPoints} pts` : '';
-  root.innerHTML = `<div class="card"><div class="meta">@${escape(view.viewer)} · ${bounty}</div><div class="title">${escape(view.title)}</div><div class="countdown"><span class="ring" style="--progress:${Math.max(0, Math.min(100, (seconds / 120) * 100)) * 3.6}deg"></span>${seconds.toFixed(3)}s</div><div class="meter"><i style="width:${Math.round(view.confidence * 100)}%"></i></div><div class="meta">REF CONFIDENCE ${Math.round(view.confidence * 100)}%</div><p class="evidence">${escape(view.evidence)}</p></div>`;
+function demoState(at: number): OverlayState {
+  const step = Math.floor(at / 4000) % 7;
+  const statuses = ['IDLE', 'QUEUED', 'ACTIVE', 'APPEAL', 'POLL', 'PASS', 'FINAL_PASS'];
+  const status = statuses[step]!;
+  const active = step >= 2;
+  const queued = step === 1;
+  const current = active ? {
+    id: 12, title: 'Balance a spoon on your nose for ten seconds', viewerLogin: 'pixelpilot', status,
+    bountyBits: 500, bountyPoints: 0, deadlineAt: Date.now() + 67_000 - (at % 4000),
+    appealCount: 2, appealThreshold: 3, appealRemainingMs: 18_000 - (at % 4000), pollRemainingMs: 41_000 - (at % 4000),
+  } : null;
+  return {
+    current, status, remainingMs: current ? Math.max(0, current.deadlineAt! - Date.now()) : 0,
+    latestTick: { progress: .78, confidence: .62, evidence: step > 2 ? 'The spoon is balanced on the streamer’s nose.' : 'A spoon is visible near the streamer’s face.' },
+    queue: queued || active ? [{ id: 13, title: 'Say the alphabet backwards', viewerLogin: 'tinychaos', bountyBits: 250, bountyPoints: 0 }, { id: 14, title: 'Do a dramatic victory pose', viewerLogin: 'sidequest', bountyBits: 0, bountyPoints: 1000 }] : [],
+    passRate: .71, lastClipUrl: 'https://www.twitch.tv/clip/InventiveDemoReceipt',
+    leaderboard: [{ viewer_login: 'pixelpilot', dare_count: 12, bits: 4400 }],
+  };
 }
 
-function escape(value: string): string { return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!); }
+function frame(_frameTime: number): void {
+  const now = Date.now();
+  if (query.demo) { state = demoState(now - demoStarted); receivedAt = now; }
+  if (state && renderer) renderer.render(state, now, query.demo || connected, receivedAt);
+  requestAnimationFrame(frame);
+}
+
+const demoStarted = Date.now();
 connect();
-setInterval(render, 50);
+requestAnimationFrame(frame);

@@ -12,12 +12,14 @@ const app = document.querySelector<HTMLElement>('#app');
 if (app) app.innerHTML = `
   <header><div><p class="eyebrow">PROVE IT / CONTROL ROOM</p><h1>Stream referee</h1></div><span id="connection" class="pill">Connecting…</span></header>
   <main>
-    <section class="panel"><div class="section-head"><h2>Connect</h2><a class="button primary" href="/auth/twitch">Connect Twitch</a></div><p id="identity">Checking channel…</p><small id="reward"></small></section>
-    <section class="panel"><h2>Overlay</h2><div class="url-row"><input id="overlay-url" readonly placeholder="Connect Twitch to get your overlay URL"><button id="copy-overlay">Copy URL</button></div><p class="hint">OBS → Browser Source → 1920×1080</p></section>
-    <section class="panel"><div class="section-head"><div><h2>Referee</h2><p class="hint">Share your display and system audio. The referee samples one frame each second.</p></div><button id="capture-button" class="primary">Start referee</button></div><div id="capture-status" class="capture-status"><span class="dot"></span><span>Referee idle</span><span>0 fps</span><span>— latency</span></div></section>
-    <section class="panel"><div class="section-head"><h2>Now</h2><span id="status-pill" class="pill">IDLE</span></div><div id="now-card" class="empty">No dare is active. Start the referee and let chat dare you.</div><div class="actions"><button id="veto">Veto</button><button id="skip">Skip</button><button id="pause">Pause</button></div></section>
+    <nav class="onboarding" aria-label="Setup progress"><a class="step" id="step-connect" href="#connect"><span class="step-number">1</span><span><b>Connect Twitch</b><small>Authorize your channel</small></span><i>✓</i></a><span class="step-link"></span><a class="step" id="step-overlay" href="#overlay"><span class="step-number">2</span><span><b>Paste overlay URL into OBS</b><small>Browser Source · 1920 × 1080</small></span><i>✓</i></a><span class="step-link"></span><a class="step" id="step-referee" href="#referee"><span class="step-number">3</span><span><b>Start referee</b><small>Share screen and audio</small></span><i>✓</i></a></nav>
+    <section class="panel" id="connect"><div class="section-head"><h2>Connect</h2><a class="button primary" href="/auth/twitch">Connect Twitch</a></div><p id="identity">Checking channel…</p><small id="reward"></small></section>
+    <section class="panel" id="overlay"><div class="section-head"><h2>Overlay</h2><a class="preview-link" href="/overlay/?demo=1&amp;scale=0.5" target="_blank" rel="noreferrer">Preview overlay ↗</a></div><div class="url-row"><input id="overlay-url" readonly placeholder="Connect Twitch to get your overlay URL"><button id="copy-overlay">Copy URL</button></div><p class="hint">OBS → Browser Source → 1920×1080</p></section>
+    <section class="panel" id="referee"><div class="section-head"><div><h2>Referee</h2><p class="hint">Share your display and system audio. The referee samples one frame each second.</p></div><button id="capture-button" class="primary">Start referee</button></div><div id="capture-status" class="capture-status"><span class="dot"></span><span>Referee idle</span><span>0 fps</span><span>— latency</span></div></section>
+    <section class="panel"><div class="section-head"><h2>Now</h2><span id="status-pill" class="pill">IDLE</span></div><div id="now-card" class="empty">No dare is active. Start the referee and let chat dare you.</div><div class="actions"><button id="veto">Veto <kbd>V</kbd></button><button id="skip">Skip <kbd>S</kbd></button><button id="pause">Pause <kbd>P</kbd></button></div></section>
     <section class="panel"><h2>Queue <span id="queue-count" class="muted">0</span></h2><ol id="queue-list" class="list"></ol></section>
     <section class="panel"><h2>History</h2><div id="history-list" class="history empty">No completed dares yet.</div></section>
+    <footer class="dash-footer"><span>PROVE IT / REFEREE CONTROL</span><a href="/overlay/?demo=1&amp;scale=0.5" target="_blank" rel="noreferrer">Preview overlay ↗</a></footer>
   </main>`;
 
 const $ = <T extends HTMLElement>(selector: string): T => document.querySelector<T>(selector)!;
@@ -37,10 +39,17 @@ async function loadIdentity(): Promise<void> {
     identity.append(avatar, document.createTextNode(`${me.display_name} (@${me.login})`));
     $('#reward').textContent = `Channel Points reward ready · ${me.rewardCost.toLocaleString()} pts · ${me.rewardId}`;
     ($('#overlay-url') as HTMLInputElement).value = me.overlayUrl;
+    updateSteps(true);
   } catch {
     $('#identity').textContent = 'No Twitch channel connected. Demo endpoints are available when DEV_MODE=true.';
     $('#reward').textContent = 'Reward cost: configured in DARE_COST_POINTS.';
   }
+}
+
+function updateSteps(connected: boolean): void {
+  $('#step-connect').classList.toggle('done', connected);
+  $('#step-overlay').classList.toggle('done', Boolean(($('#overlay-url') as HTMLInputElement).value));
+  $('#step-referee').classList.toggle('done', Boolean(capture));
 }
 
 function connect(): void {
@@ -93,13 +102,23 @@ $('#capture-button').addEventListener('click', async () => {
       const node = $('#capture-status');
       node.innerHTML = `<span class="dot ${status.watching ? 'on' : ''}"></span><span>${escapeHtml(status.message)}</span><span>${status.fps} fps</span><span>${status.latencyMs === null ? '—' : `${status.latencyMs} ms`} latency</span>`;
       if (!status.watching) { capture = null; button.textContent = 'Start referee'; }
+      updateSteps(Boolean(capture));
     });
     button.textContent = 'Stop referee';
+    updateSteps(true);
   } catch (error) { alert(error instanceof Error ? error.message : 'Could not start capture'); }
   finally { button.disabled = false; }
 });
 $('#veto').addEventListener('click', () => { void fetch('/api/dare/veto', { method: 'POST', credentials: 'include' }); });
 $('#skip').addEventListener('click', () => { void fetch('/api/dare/skip', { method: 'POST', credentials: 'include' }); });
 $('#pause').addEventListener('click', () => { void fetch('/api/pause', { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paused: !latestState?.paused }) }); });
+document.addEventListener('keydown', (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) return;
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+  const key = event.key.toLowerCase();
+  if (key === 'v') { event.preventDefault(); $('#veto').click(); }
+  if (key === 's') { event.preventDefault(); $('#skip').click(); }
+  if (key === 'p') { event.preventDefault(); $('#pause').click(); }
+});
 void loadIdentity();
 connect();
