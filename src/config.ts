@@ -2,6 +2,8 @@ import 'dotenv/config';
 import { z } from 'zod';
 
 const envSchema = z.object({
+  DEV_MODE: z.preprocess((value) => value === true || value === 'true', z.boolean().default(false)),
+  REFEREE_MOCK: z.preprocess((value) => value === true || value === 'true', z.boolean().default(false)),
   PORT: z.coerce.number().int().positive().default(3000),
   PUBLIC_URL: z.string().url().default('http://localhost:3000'),
   SESSION_SECRET: z.string().min(1).default('development-only-change-me'),

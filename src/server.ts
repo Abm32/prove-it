@@ -13,11 +13,14 @@ import { judgeTick } from './ai/vision.js';
 import { transcribeChunk } from './ai/stt.js';
 import { RefereeService } from './referee/service.js';
 import { registerApiRoutes } from './web/api.js';
+import { registerCaptureRoutes } from './web/capture.js';
+import { registerDevRoutes } from './web/dev.js';
 import { registerAuthRoutes } from './web/auth.js';
 import { verifyOverlayToken } from './web/overlayToken.js';
 import { db } from './db.js';
+import { createMockJudge, mockParseDare } from './referee/mock.js';
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
 await app.register(fastifyCookie, { secret: config.SESSION_SECRET });
 await app.register(fastifyWebsocket);
 await app.register(fastifyStatic, { root: resolve('public'), prefix: '/' });
@@ -32,29 +35,45 @@ app.get<{ Querystring: { token?: string } }>('/overlay', async (request, reply) 
 const tokenRow = db.prepare('SELECT user_id, reward_id FROM tokens ORDER BY rowid LIMIT 1').get() as { user_id: string; reward_id: string | null } | undefined;
 let referee: RefereeService | null = null;
 let eventsub: EventSubClient | null = null;
-if (tokenRow) {
+if (tokenRow || config.DEV_MODE) {
   try {
-    const rewardId = tokenRow.reward_id ?? await ensureReward(tokenRow.user_id);
+    const userId = tokenRow?.user_id ?? 'dev-channel';
+    const rewardId = tokenRow ? tokenRow.reward_id ?? await ensureReward(userId) : 'dev-reward';
     eventsub = new EventSubClient({
-      userId: tokenRow.user_id,
-      broadcasterId: tokenRow.user_id,
-      getAccessToken: () => getValidToken(tokenRow.user_id),
+      userId,
+      broadcasterId: userId,
+      getAccessToken: () => tokenRow ? getValidToken(userId) : Promise.resolve(''),
     });
+    const demoHelix = {
+      updateRedemptionStatus: async (...args: unknown[]) => { app.log.info({ call: 'updateRedemptionStatus', args }, 'Demo Helix no-op'); },
+      sendChatMessage: async (_userId: string, _broadcasterId: string, _senderId: string, message: string) => { app.log.info({ message }, 'Demo Helix chat no-op'); return { data: [{ message_id: `demo-message-${Date.now()}` }] }; },
+      pinChatMessage: async () => undefined,
+      unpinChatMessage: async () => undefined,
+      createClip: async () => ({ id: 'demo-clip' }),
+      getClip: async () => null,
+      createStreamMarker: async (...args: unknown[]) => { app.log.info({ call: 'createStreamMarker', args }, 'Demo Helix no-op'); return undefined; },
+      getStream: async () => null,
+      createPoll: async () => ({ id: `demo-poll-${Date.now()}` }),
+    };
     referee = new RefereeService({
-      userId: tokenRow.user_id,
+      userId,
       rewardId,
       eventsub,
       db,
-      helix: { updateRedemptionStatus, sendChatMessage, pinChatMessage, unpinChatMessage, createClip, getClip, createStreamMarker, getStream, createPoll },
-      ai: { parseDare, judgeTick, transcribeChunk },
+      helix: tokenRow ? { updateRedemptionStatus, sendChatMessage, pinChatMessage, unpinChatMessage, createClip, getClip, createStreamMarker, getStream, createPoll } : demoHelix,
+      ai: config.REFEREE_MOCK
+        ? { parseDare: mockParseDare, judgeTick: createMockJudge(), transcribeChunk: async () => '' }
+        : { parseDare, judgeTick, transcribeChunk },
     });
     referee.start();
-    eventsub.start();
+    if (tokenRow) eventsub.start();
   } catch (error) {
     app.log.error({ error }, 'Could not start Twitch referee');
   }
 }
-await registerApiRoutes(app, referee, config.SESSION_SECRET);
+await registerApiRoutes(app, referee, config.SESSION_SECRET, config.DEV_MODE);
+await registerCaptureRoutes(app, referee);
+await registerDevRoutes(app, referee, config.DEV_MODE);
 app.addHook('onClose', async () => {
   referee?.stop();
   eventsub?.stop();

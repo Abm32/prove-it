@@ -53,6 +53,11 @@ export interface RefereePublicState {
     kind: string;
     bountyPoints: number;
     bountyBits: number;
+    deadlineAt: number | null;
+    appealCount: number;
+    appealThreshold: number;
+    appealRemainingMs: number;
+    pollRemainingMs: number;
   };
   status: string;
   remainingMs: number;
@@ -97,6 +102,8 @@ export class RefereeService {
   private current: DareMachine | null = null;
   private currentMetadata: DareMetadata | null = null;
   private pollId: string | null = null;
+  private pollStartedAt: number | null = null;
+  private finalVisibleUntil: number | null = null;
   private lastClipUrl: string | null = null;
   private paused = false;
   private pausedAt: number | null = null;
@@ -182,10 +189,13 @@ export class RefereeService {
       .reduce((sum, choice) => sum + choice.votes, 0);
     this.current = resolvePoll(this.current, overruleVotes > upholdVotes, this.clock.now());
     this.persistMachine(this.current);
-    if (this.current.status === 'FINAL_PASS') await this.settlePass(true);
+    if (this.current.status === 'FINAL_PASS') {
+      await this.settlePass(true);
+      this.finalVisibleUntil = this.clock.now() + 4000;
+    }
     else {
       this.persistDecision(this.current);
-      await this.completeCurrent();
+      this.finalVisibleUntil = this.clock.now() + 4000;
     }
     this.broadcast();
   }
@@ -196,6 +206,7 @@ export class RefereeService {
   }
 
   async ingestAudio(buffer: Buffer, mime: string): Promise<string> {
+    if (!this.current || (this.current.status !== 'ACTIVE' && this.current.status !== 'JUDGING')) return '';
     const text = await this.options.ai.transcribeChunk(buffer, mime);
     const at = this.clock.now();
     this.transcript.push({ at, text });
@@ -221,23 +232,63 @@ export class RefereeService {
         priorEvidence: current.history.slice(-5).map((tick) => tick.evidence),
       });
       if (!this.current || this.current.dare.id !== current.dare.id || (this.current.status !== 'ACTIVE' && this.current.status !== 'JUDGING')) return;
-      const timedTick = { ...value, at: this.clock.now() };
-      this.options.db.prepare(`INSERT INTO verdict_ticks (dare_id, at, progress, confidence, done, evidence)
-        VALUES (?, ?, ?, ?, ?, ?)`).run(current.dare.id, timedTick.at, timedTick.progress, timedTick.confidence, timedTick.done ? 1 : 0, timedTick.evidence);
-      this.current = machineTick(this.current, timedTick);
-      this.persistMachine(this.current);
-      if (this.current.status === 'PASS' && !this.passEffectsDone) await this.settlePass(false);
-      if (this.current.status === 'FAIL' && !this.failEffectsDone) await this.settleFail();
-      this.broadcast();
+      await this.applyTick({ ...value, at: this.clock.now() });
     } finally {
       this.ticking = false;
     }
   }
 
+  async applyTick(value: Tick): Promise<void> {
+    if (!this.current || (this.current.status !== 'ACTIVE' && this.current.status !== 'JUDGING')) return;
+    const timedTick = { ...value, at: value.at || this.clock.now() };
+    this.options.db.prepare(`INSERT INTO verdict_ticks (dare_id, at, progress, confidence, done, evidence)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(this.current.dare.id, timedTick.at, timedTick.progress, timedTick.confidence, timedTick.done ? 1 : 0, timedTick.evidence);
+    this.current = machineTick(this.current, timedTick);
+    this.persistMachine(this.current);
+    if (this.current.status === 'PASS' && !this.passEffectsDone) await this.settlePass(false);
+    if (this.current.status === 'FAIL' && !this.failEffectsDone) await this.settleFail();
+    this.broadcast();
+  }
+
+  async injectDare(viewer: string, text: string, bits = 0): Promise<void> {
+    if (this.current && ['PASS', 'FAIL', 'APPEAL'].includes(this.current.status)) {
+      const finalAt = (this.current.decidedAt ?? this.clock.now()) + this.current.options.appealWindowSec * 1000 + 1;
+      await this.advance(Math.max(this.clock.now(), finalAt + 4001));
+    }
+    if (this.current && (this.current.status === 'FINAL_PASS' || this.current.status === 'FINAL_FAIL')) await this.completeCurrent();
+    const login = viewer.trim().replace(/^@/, '').toLowerCase() || 'demo_viewer';
+    await this.createDare({ viewerId: `demo-${login}`, viewerLogin: login, viewerName: login, text,
+      bountyPoints: bits > 0 ? 0 : config.DARE_COST_POINTS, bountyBits: Math.max(0, Math.floor(bits)),
+      redemptionId: null, redemptionRewardId: null });
+  }
+
+  async injectAppeal(viewer: string): Promise<void> {
+    const login = viewer.trim().replace(/^@/, '').toLowerCase() || 'demo_viewer';
+    await this.submitAppeal(`demo-${login}`);
+  }
+
+  async injectPoll(overrule: boolean): Promise<void> {
+    if (!this.current || this.current.status !== 'POLL') return;
+    await this.onPollEnd({ id: this.pollId ?? '', broadcaster_user_id: this.options.userId, title: '', choices: [
+        { id: 'overrule', title: 'Overrule — it\'s a PASS', votes: overrule ? 2 : 0, channel_points_votes: 0 },
+        { id: 'uphold', title: 'Uphold — FAIL stands', votes: overrule ? 0 : 2, channel_points_votes: 0 },
+      ], status: 'completed', started_at: '', ended_at: '' });
+  }
+
+  get activeDare(): boolean { return !!this.current && (this.current.status === 'ACTIVE' || this.current.status === 'JUDGING'); }
+  get tickIntervalMs(): number { return this.tickMs; }
+
   async advance(now = this.clock.now()): Promise<void> {
     if (this.paused) return;
     if (!this.current) {
       await this.startNext();
+      return;
+    }
+    if ((this.current.status === 'FINAL_PASS' || this.current.status === 'FINAL_FAIL') && this.finalVisibleUntil !== null) {
+      if (now >= this.finalVisibleUntil) {
+        await this.completeCurrent();
+        this.broadcast();
+      }
       return;
     }
     const previousStatus = this.current.status;
@@ -247,10 +298,10 @@ export class RefereeService {
       if (this.current.status === 'FAIL' && !this.failEffectsDone) await this.settleFail();
       if (this.current.status === 'FINAL_PASS') {
         if (!this.passEffectsDone) await this.settlePass(false);
-        await this.completeCurrent();
+        this.finalVisibleUntil = now + 4000;
       } else if (this.current.status === 'FINAL_FAIL') {
         this.persistDecision(this.current);
-        await this.completeCurrent();
+        this.finalVisibleUntil = now + 4000;
       }
       this.broadcast();
     }
@@ -322,6 +373,11 @@ export class RefereeService {
         kind: current.dare.kind,
         bountyPoints: current.dare.bountyPoints,
         bountyBits: current.dare.bountyBits,
+        deadlineAt: current.deadlineAt,
+        appealCount: current.appeals.length,
+        appealThreshold: current.options.appealThreshold,
+        appealRemainingMs: current.decidedAt === null ? 0 : Math.max(0, current.decidedAt + current.options.appealWindowSec * 1000 - this.clock.now()),
+        pollRemainingMs: this.pollStartedAt === null ? 0 : Math.max(0, this.pollStartedAt + 60_000 - this.clock.now()),
       } : null,
       status: current?.status ?? 'IDLE',
       remainingMs: current?.deadlineAt === null || current?.deadlineAt === undefined ? 0 : Math.max(0, current.deadlineAt - (this.paused ? this.pausedAt ?? this.clock.now() : this.clock.now())),
@@ -401,6 +457,8 @@ export class RefereeService {
     this.passEffectsDone = false;
     this.failEffectsDone = false;
     this.pollId = null;
+    this.pollStartedAt = null;
+    this.finalVisibleUntil = null;
     this.current = startMachine(createDareMachine(dare), this.clock.now());
     this.options.db.prepare('UPDATE dares SET status = ?, started_at = ?, deadline_at = ? WHERE id = ?')
       .run(this.current.status, this.current.startedAt, this.current.deadlineAt, dare.id);
@@ -424,6 +482,7 @@ export class RefereeService {
       const poll = await this.options.helix.createPoll(this.options.userId, this.options.userId,
         `Overrule the ref on dare #${this.current.dare.id}?`, ["Overrule — it's a PASS", 'Uphold — FAIL stands'], 60);
       this.pollId = poll.id;
+      this.pollStartedAt = this.clock.now();
       this.options.db.prepare('UPDATE dares SET poll_id = ? WHERE id = ?').run(poll.id, this.current.dare.id);
       await this.sendChat(`🗳️ Appeal poll is live for dare #${this.current.dare.id}.`);
     }
@@ -492,6 +551,7 @@ export class RefereeService {
     this.current = null;
     this.currentMetadata = null;
     this.pollId = null;
+    this.pollStartedAt = null;
     this.redemptionSettled = false;
     this.passEffectsDone = false;
     this.failEffectsDone = false;

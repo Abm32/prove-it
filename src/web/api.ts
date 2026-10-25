@@ -19,11 +19,11 @@ function serviceUnavailable(reply: FastifyReply): FastifyReply {
   return reply.code(503).send({ error: 'Referee is not connected' });
 }
 
-export async function registerApiRoutes(app: FastifyInstance, service: RefereeService | null, sessionSecret: string): Promise<void> {
+export async function registerApiRoutes(app: FastifyInstance, service: RefereeService | null, sessionSecret: string, devMode = false): Promise<void> {
   app.get<{ Querystring: TokenQuery }>('/api/state', async (request, reply) => {
     if (!service) return serviceUnavailable(reply);
     const tokenUid = request.query.token ? verifyOverlayToken(request.query.token, sessionSecret) : null;
-    const uid = tokenUid ?? cookieUid(request);
+    const uid = tokenUid ?? cookieUid(request) ?? (devMode ? service.channelUserId : null);
     if (!uid || uid !== service.channelUserId) return unauthorized(reply);
     return service.getPublicState();
   });
@@ -59,7 +59,8 @@ export async function registerApiRoutes(app: FastifyInstance, service: RefereeSe
   });
 
   app.get<{ Querystring: TokenQuery }>('/ws/overlay', { websocket: true }, (socket, request) => {
-    if (!service || !request.query.token || verifyOverlayToken(request.query.token, sessionSecret) !== service.channelUserId) {
+    const wsUid = request.query.token ? verifyOverlayToken(request.query.token, sessionSecret) : cookieUid(request);
+    if (!service || (wsUid !== service.channelUserId && !(devMode && !wsUid))) {
       socket.close(1008, 'Unauthorized');
       return;
     }

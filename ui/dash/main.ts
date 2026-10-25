@@ -1,1 +1,105 @@
-document.querySelector<HTMLElement>('#app')?.replaceChildren('PROVE IT dashboard');
+import { startCapture, type CaptureController, type CaptureStatus } from './capture.js';
+
+interface State {
+  current: null | { id: number; title: string; text: string; viewerLogin: string; status: string; bountyPoints: number; bountyBits: number; deadlineAt: number | null; appealCount: number; appealThreshold: number };
+  status: string; remainingMs: number; latestTick: null | { progress: number; confidence: number; evidence: string };
+  queue: Array<{ id: number; title: string; viewerLogin: string; bountyBits: number; bountyPoints: number }>;
+  leaderboard: Array<{ viewer_login: string; dare_count: number; bits: number; points: number }>;
+  passRate: number; lastClipUrl: string | null; paused: boolean;
+}
+
+const app = document.querySelector<HTMLElement>('#app');
+if (app) app.innerHTML = `
+  <header><div><p class="eyebrow">PROVE IT / CONTROL ROOM</p><h1>Stream referee</h1></div><span id="connection" class="pill">Connecting…</span></header>
+  <main>
+    <section class="panel"><div class="section-head"><h2>Connect</h2><a class="button primary" href="/auth/twitch">Connect Twitch</a></div><p id="identity">Checking channel…</p><small id="reward"></small></section>
+    <section class="panel"><h2>Overlay</h2><div class="url-row"><input id="overlay-url" readonly placeholder="Connect Twitch to get your overlay URL"><button id="copy-overlay">Copy URL</button></div><p class="hint">OBS → Browser Source → 1920×1080</p></section>
+    <section class="panel"><div class="section-head"><div><h2>Referee</h2><p class="hint">Share your display and system audio. The referee samples one frame each second.</p></div><button id="capture-button" class="primary">Start referee</button></div><div id="capture-status" class="capture-status"><span class="dot"></span><span>Referee idle</span><span>0 fps</span><span>— latency</span></div></section>
+    <section class="panel"><div class="section-head"><h2>Now</h2><span id="status-pill" class="pill">IDLE</span></div><div id="now-card" class="empty">No dare is active. Start the referee and let chat dare you.</div><div class="actions"><button id="veto">Veto</button><button id="skip">Skip</button><button id="pause">Pause</button></div></section>
+    <section class="panel"><h2>Queue <span id="queue-count" class="muted">0</span></h2><ol id="queue-list" class="list"></ol></section>
+    <section class="panel"><h2>History</h2><div id="history-list" class="history empty">No completed dares yet.</div></section>
+  </main>`;
+
+const $ = <T extends HTMLElement>(selector: string): T => document.querySelector<T>(selector)!;
+let capture: CaptureController | null = null;
+let latestState: State | null = null;
+let ws: WebSocket | null = null;
+let retry = 500;
+
+async function loadIdentity(): Promise<void> {
+  try {
+    const response = await fetch('/api/me', { credentials: 'include' });
+    if (!response.ok) throw new Error('demo');
+    const me = await response.json() as { login: string; display_name: string; avatarUrl: string; overlayUrl: string; rewardId: string; rewardCost: number };
+    const identity = $('#identity');
+    identity.replaceChildren();
+    const avatar = document.createElement('img'); avatar.src = me.avatarUrl; avatar.alt = ''; avatar.width = 38; avatar.height = 38; avatar.style.cssText = 'border-radius:50%;vertical-align:middle;margin-right:10px';
+    identity.append(avatar, document.createTextNode(`${me.display_name} (@${me.login})`));
+    $('#reward').textContent = `Channel Points reward ready · ${me.rewardCost.toLocaleString()} pts · ${me.rewardId}`;
+    ($('#overlay-url') as HTMLInputElement).value = me.overlayUrl;
+  } catch {
+    $('#identity').textContent = 'No Twitch channel connected. Demo endpoints are available when DEV_MODE=true.';
+    $('#reward').textContent = 'Reward cost: configured in DARE_COST_POINTS.';
+  }
+}
+
+function connect(): void {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${location.host}/ws/overlay`);
+  ws.onopen = () => { retry = 500; $('#connection').textContent = 'Live'; $('#connection').classList.add('live'); };
+  ws.onmessage = (event) => { try { render(JSON.parse(event.data) as State); } catch { /* ignore malformed state */ } };
+  ws.onclose = () => { $('#connection').textContent = 'Reconnecting…'; $('#connection').classList.remove('live'); setTimeout(connect, retry); retry = Math.min(10_000, retry * 2); };
+  ws.onerror = () => ws?.close();
+}
+
+function render(state: State): void {
+  latestState = state;
+  $('#status-pill').textContent = state.status;
+  const card = $('#now-card');
+  if (!state.current) { card.className = 'empty'; card.textContent = 'No dare is active.'; }
+  else {
+    const c = state.current;
+    card.className = 'dare-card';
+    card.innerHTML = `<div class="dare-meta">#${c.id} · @${escapeHtml(c.viewerLogin)} · ${c.bountyBits ? `${c.bountyBits} bits` : `${c.bountyPoints} pts`}</div><h3></h3><p class="dare-text"></p><div class="timer">${Math.ceil(state.remainingMs / 1000)}s remaining</div><div class="meter"><i style="width:${Math.round((state.latestTick?.confidence ?? 0) * 100)}%"></i></div><p class="evidence"></p>`;
+    card.querySelector('h3')!.textContent = c.title;
+    card.querySelector('.dare-text')!.textContent = c.text;
+    card.querySelector('.evidence')!.textContent = state.latestTick?.evidence ?? 'Waiting for evidence…';
+  }
+  $('#queue-count').textContent = String(state.queue.length);
+  const list = $('#queue-list');
+  list.replaceChildren(...(state.queue.length ? state.queue.map((item) => { const li = document.createElement('li'); li.innerHTML = `<strong>#${item.id} · @${escapeHtml(item.viewerLogin)}</strong><span></span>`; li.querySelector('span')!.textContent = item.title; return li; }) : [Object.assign(document.createElement('li'), { textContent: 'Queue is empty.' })]));
+  $('#pause').textContent = state.paused ? 'Resume' : 'Pause';
+  void loadHistory();
+}
+
+function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!); }
+async function loadHistory(): Promise<void> {
+  const response = await fetch('/api/dares?limit=10', { credentials: 'include' });
+  if (!response.ok) return;
+  const data = await response.json() as { dares: Array<{ id: number; viewer_login: string; text: string; verdict: string | null; status: string; clip_url: string | null }> };
+  const node = $('#history-list');
+  if (!data.dares.length) { node.className = 'history empty'; node.textContent = 'No completed dares yet.'; return; }
+  node.className = 'history';
+  node.innerHTML = data.dares.map((dare) => `<div class="history-row"><span class="verdict ${dare.verdict === 'PASS' ? 'pass' : dare.verdict === 'FAIL' ? 'fail' : ''}">${escapeHtml(dare.verdict ?? dare.status)}</span><span>@${escapeHtml(dare.viewer_login)} · ${escapeHtml(dare.text)}</span>${dare.clip_url ? `<a href="${escapeHtml(dare.clip_url)}" target="_blank" rel="noreferrer">Clip ↗</a>` : ''}</div>`).join('');
+}
+
+$('#copy-overlay').addEventListener('click', () => { const input = $('#overlay-url') as HTMLInputElement; if (input.value) void navigator.clipboard.writeText(input.value); });
+$('#capture-button').addEventListener('click', async () => {
+  const button = $('#capture-button') as HTMLButtonElement;
+  if (capture) { capture.stop(); capture = null; button.textContent = 'Start referee'; return; }
+  button.disabled = true;
+  try {
+    capture = await startCapture((status: CaptureStatus) => {
+      const node = $('#capture-status');
+      node.innerHTML = `<span class="dot ${status.watching ? 'on' : ''}"></span><span>${escapeHtml(status.message)}</span><span>${status.fps} fps</span><span>${status.latencyMs === null ? '—' : `${status.latencyMs} ms`} latency</span>`;
+      if (!status.watching) { capture = null; button.textContent = 'Start referee'; }
+    });
+    button.textContent = 'Stop referee';
+  } catch (error) { alert(error instanceof Error ? error.message : 'Could not start capture'); }
+  finally { button.disabled = false; }
+});
+$('#veto').addEventListener('click', () => { void fetch('/api/dare/veto', { method: 'POST', credentials: 'include' }); });
+$('#skip').addEventListener('click', () => { void fetch('/api/dare/skip', { method: 'POST', credentials: 'include' }); });
+$('#pause').addEventListener('click', () => { void fetch('/api/pause', { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paused: !latestState?.paused }) }); });
+void loadIdentity();
+connect();

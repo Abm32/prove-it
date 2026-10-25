@@ -51,6 +51,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if (!user) return reply.code(401).send({ error: 'Twitch user is unavailable' });
     const rewardId = await ensureReward(cookie.value);
     const overlayUrl = `${config.PUBLIC_URL.replace(/\/$/, '')}/overlay?token=${encodeURIComponent(createOverlayToken(cookie.value, config.SESSION_SECRET))}`;
-    return { login: user.login, display_name: user.display_name, overlayUrl, rewardId };
+    return { login: user.login, display_name: user.display_name, avatarUrl: user.profile_image_url, rewardId, rewardCost: config.DARE_COST_POINTS };
   });
 }
