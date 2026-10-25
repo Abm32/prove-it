@@ -1,0 +1,1 @@
+{"metadata":{"message_id":"reconnect-1","message_type":"session_reconnect"},"payload":{"session":{"id":"session-1","status":"reconnecting","connected_at":"2026-10-26T10:00:00Z","keepalive_timeout_seconds":10,"reconnect_url":"ws://127.0.0.1:8080/ws/reconnect"}}}

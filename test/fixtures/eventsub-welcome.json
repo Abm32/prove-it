@@ -1,0 +1,1 @@
+{"metadata":{"message_id":"welcome-1","message_type":"session_welcome"},"payload":{"session":{"id":"session-1","status":"connected","connected_at":"2026-10-26T10:00:00Z","keepalive_timeout_seconds":10,"reconnect_url":null}}}

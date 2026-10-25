@@ -1,0 +1,1 @@
+{"metadata":{"message_id":"notification-cheer-1","message_type":"notification"},"payload":{"subscription":{"type":"channel.cheer","version":"1","condition":{"broadcaster_user_id":"broadcaster-1"}},"event":{"is_anonymous":false,"user_id":"viewer-1","user_login":"viewer","user_name":"Viewer","broadcaster_user_id":"broadcaster-1","message":"gg","bits":100}}}

@@ -1,0 +1,1 @@
+{"metadata":{"message_id":"notification-online-1","message_type":"notification"},"payload":{"subscription":{"type":"stream.online","version":"1","condition":{"broadcaster_user_id":"broadcaster-1"}},"event":{"id":"stream-1","broadcaster_user_id":"broadcaster-1","type":"live","started_at":"2026-10-26T10:00:00Z"}}}

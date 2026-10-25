@@ -1,0 +1,1 @@
+{"metadata":{"message_id":"notification-offline-1","message_type":"notification"},"payload":{"subscription":{"type":"stream.offline","version":"1","condition":{"broadcaster_user_id":"broadcaster-1"}},"event":{"broadcaster_user_id":"broadcaster-1"}}}
