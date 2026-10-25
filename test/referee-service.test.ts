@@ -1,0 +1,181 @@
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import test from 'node:test';
+import { validateParsedDare } from '../src/ai/dareParser.js';
+import type { EventSubClient, PollEndEvent, RedemptionEvent } from '../src/twitch/eventsub.js';
+import { EventSubClient as EventSub } from '../src/twitch/eventsub.js';
+import type { ParsedDare } from '../src/ai/dareParser.js';
+import { migrate } from '../src/db.js';
+import { RefereeService, type RefereeClock, type RefereeHelix } from '../src/referee/service.js';
+import type { Tick } from '../src/referee/types.js';
+
+class FakeClock implements RefereeClock {
+  value = 1_000_000;
+  now(): number { return this.value; }
+  setInterval(_callback: () => void, _milliseconds: number): ReturnType<typeof setInterval> { return undefined as ReturnType<typeof setInterval>; }
+  clearInterval(_timer: ReturnType<typeof setInterval>): void {}
+  advance(milliseconds: number): void { this.value += milliseconds; }
+}
+
+function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = []) {
+  const db = new DatabaseSync(':memory:');
+  migrate(db);
+  const clock = new FakeClock();
+  const calls: Array<{ name: string; args: unknown[] }> = [];
+  const record = (name: string) => async (...args: unknown[]) => { calls.push({ name, args }); };
+  const helix: RefereeHelix = {
+    updateRedemptionStatus: record('redemption-status'),
+    sendChatMessage: async (...args) => { calls.push({ name: 'chat', args }); return { data: [{ message_id: `message-${calls.length}` }] }; },
+    pinChatMessage: async (...args) => { calls.push({ name: 'pin', args }); },
+    unpinChatMessage: record('unpin'),
+    createClip: async (...args) => { calls.push({ name: 'create-clip', args }); return { id: 'clip-1' }; },
+    getClip: async (...args) => { calls.push({ name: 'get-clip', args }); return { id: 'clip-1', url: 'https://clips.twitch.tv/clip-1' }; },
+    createStreamMarker: record('marker'),
+    getStream: async (...args) => { calls.push({ name: 'get-stream', args }); return { id: 'stream-1' }; },
+    createPoll: async (...args) => { calls.push({ name: 'create-poll', args }); return { id: 'poll-1' }; },
+  };
+  const eventsub = new EventSub({
+    userId: 'streamer-1',
+    broadcasterId: 'streamer-1',
+    getAccessToken: async () => 'test-token',
+    subscribe: async () => undefined,
+  });
+  const service = new RefereeService({
+    userId: 'streamer-1',
+    rewardId: 'reward-1',
+    eventsub: eventsub as EventSubClient,
+    db,
+    helix,
+    ai: {
+      parseDare: async (text) => parsedResults?.[text] ?? {
+        ok: true,
+        kind: 'visual',
+        cleanTitle: `Do ${text}`,
+        condition: { summary: text, successCriteria: text, durationSec: 30 },
+      },
+      judgeTick: async () => ticks.shift() ?? { at: clock.now(), progress: 0, evidence: 'No evidence', done: false, confidence: 0.2 },
+      transcribeChunk: async () => 'transcribed phrase',
+    },
+    clock,
+    tickMs: 2000,
+  });
+  return { db, clock, calls, service };
+}
+
+function redemption(text: string, viewerId = 'viewer-1'): RedemptionEvent {
+  return {
+    id: `redemption-${viewerId}`,
+    broadcaster_user_id: 'streamer-1',
+    user_id: viewerId,
+    user_login: viewerId,
+    user_name: viewerId,
+    user_input: text,
+    status: 'unfulfilled',
+    reward: { id: 'reward-1', title: 'Dare the streamer', cost: 1000, prompt: 'Dare' },
+    redeemed_at: new Date(1_000_000).toISOString(),
+  };
+}
+
+const passTick = (at: number): Tick => ({ at, progress: 1, evidence: 'The requested action is visible', done: true, confidence: 0.95 });
+
+test('redemption queues, starts, and passes after two qualifying ticks with ordered side effects', async () => {
+  const { service, clock, calls, db } = setup(undefined, [passTick(1), passTick(2)]);
+  await service.onRedemption(redemption('wave once'));
+  assert.equal(service.getPublicState().current?.status, 'ACTIVE');
+  clock.advance(2000);
+  await service.runTick();
+  assert.equal(service.getPublicState().current?.status, 'JUDGING');
+  clock.advance(2000);
+  await service.runTick();
+  assert.equal(service.getPublicState().current?.status, 'PASS');
+  const names = calls.map((call) => call.name);
+  const passActions = ['redemption-status', 'get-stream', 'create-clip', 'get-clip', 'marker', 'chat', 'unpin'];
+  const positions = passActions.map((name) => names.lastIndexOf(name));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  const row = db.prepare('SELECT status, verdict, clip_url FROM dares').get() as { status: string; verdict: string; clip_url: string };
+  assert.equal(row.status, 'PASS');
+  assert.equal(row.verdict, 'PASS');
+  assert.equal(row.clip_url, 'https://clips.twitch.tv/clip-1');
+});
+
+test('rejected redemption is refunded and is not inserted', async () => {
+  const { service, calls, db } = setup({
+    'dangerous dare': { ok: false, reason: 'That challenge is unsafe.' },
+  });
+  await service.onRedemption(redemption('dangerous dare'));
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM dares').get() as { count: number }).count, 0);
+  assert.ok(calls.some((call) => call.name === 'redemption-status' && call.args.at(-1) === 'CANCELED'));
+  assert.ok(calls.some((call) => call.name === 'chat' && String(call.args.at(-1)).includes('That challenge is unsafe.')));
+});
+
+test('deadline FAIL with three appeals opens a poll; overrule settles FINAL_PASS with a clip', async () => {
+  const { service, clock, calls, db } = setup();
+  await service.onRedemption(redemption('beat the timer'));
+  clock.advance(30_000);
+  await service.advance();
+  assert.equal(service.getPublicState().current?.status, 'FAIL');
+  assert.ok(calls.some((call) => call.name === 'redemption-status' && call.args.at(-1) === 'FULFILLED'));
+  for (const viewerId of ['appeal-1', 'appeal-2', 'appeal-3']) {
+    await service.onChatMessage({
+      message_id: `message-${viewerId}`,
+      broadcaster_user_id: 'streamer-1',
+      chatter_user_id: viewerId,
+      chatter_user_login: viewerId,
+      chatter_user_name: viewerId,
+      message: { text: '!appeal', fragments: [] },
+      message_type: 'text',
+      badges: [],
+    });
+  }
+  assert.equal(service.getPublicState().current?.status, 'POLL');
+  assert.ok(calls.some((call) => call.name === 'create-poll'));
+  const poll: PollEndEvent = {
+    id: 'poll-1',
+    broadcaster_user_id: 'streamer-1',
+    title: 'Overrule the ref?',
+    choices: [
+      { id: 'yes', title: "Overrule — it's a PASS", votes: 5, channel_points_votes: 0 },
+      { id: 'no', title: 'Uphold — FAIL stands', votes: 2, channel_points_votes: 0 },
+    ],
+    status: 'completed',
+    started_at: new Date(clock.now()).toISOString(),
+    ended_at: new Date(clock.now()).toISOString(),
+  };
+  await service.onPollEnd(poll);
+  const row = db.prepare('SELECT status, verdict, clip_url FROM dares').get() as { status: string; verdict: string; clip_url: string };
+  assert.equal(row.status, 'FINAL_PASS');
+  assert.equal(row.verdict, 'PASS');
+  assert.equal(row.clip_url, 'https://clips.twitch.tv/clip-1');
+  assert.ok(calls.some((call) => call.name === 'chat' && String(call.args.at(-1)).includes('Chat overruled the ref')));
+});
+
+test('Bits dares outrank queued Channel Point dares', async () => {
+  const { service } = setup();
+  service.setPaused(true);
+  await service.onRedemption(redemption('points challenge', 'points-viewer'));
+  await service.onChatMessage({
+    message_id: 'bits-message',
+    broadcaster_user_id: 'streamer-1',
+    chatter_user_id: 'bits-viewer',
+    chatter_user_login: 'bits-viewer',
+    chatter_user_name: 'bits-viewer',
+    message: { text: '!dare say hello', fragments: [] },
+    message_type: 'text',
+    badges: [],
+    cheer: { bits: 25 },
+  });
+  service.setPaused(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(service.getPublicState().current?.viewerLogin, 'bits-viewer');
+  assert.equal(service.getPublicState().current?.bountyBits, 25);
+});
+
+test('validateParsedDare rejects duration outside the accepted range', () => {
+  assert.equal(validateParsedDare({
+    ok: true,
+    kind: 'timed',
+    cleanTitle: 'Hold still',
+    condition: { summary: 'hold still', successCriteria: 'remain still', durationSec: 181 },
+  }), false);
+});

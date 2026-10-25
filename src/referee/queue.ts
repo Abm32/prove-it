@@ -24,4 +24,8 @@ export class DareQueue {
   get size(): number {
     return this.pending.length;
   }
+
+  preview(limit = 3): Dare[] {
+    return this.pending.slice(0, Math.max(0, limit));
+  }
 }

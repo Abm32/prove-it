@@ -4,9 +4,9 @@ Chat dares the streamer, an AI referee calls it, the clip is the receipt.
 Entry for the Codex x TwitchCon Hackathon (deadline Nov 2 2026). Read `docs/superpowers/specs/2026-10-26-prove-it-design.md` before any task; it is the source of truth for scope.
 
 ## Stack (fixed)
-- Node 22+, TypeScript strict, ESM. Single process.
+- Node 22.13+, TypeScript strict, ESM. Single process.
 - Server: Fastify. Static UI: vanilla TS + CSS bundled with esbuild (no React).
-- DB: better-sqlite3 (file `data/prove-it.db`).
+- DB: Node built-in `node:sqlite` (`DatabaseSync`, file `data/prove-it.db`).
 - Twitch: EventSub over WebSocket + Helix via plain `fetch`. No twurple/tmi.
 - OpenAI: official `openai` SDK. Vision model and whisper model names come from env (`OPENAI_VISION_MODEL`, `OPENAI_STT_MODEL`).
 - Tests: `node --test` (node:test). Fixtures for Twitch payloads live in `test/fixtures/`.

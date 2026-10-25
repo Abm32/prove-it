@@ -70,7 +70,7 @@ export function advance(state: DareMachine, now: number): DareMachine {
 }
 
 export function veto(state: DareMachine): DareMachine {
-  if (state.status !== 'QUEUED' && state.status !== 'ACTIVE') return illegal('veto', state);
+  if (state.status !== 'QUEUED' && state.status !== 'ACTIVE' && state.status !== 'JUDGING') return illegal('veto', state);
   return { ...state, status: 'VETOED' };
 }
 
