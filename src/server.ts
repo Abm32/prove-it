@@ -25,7 +25,6 @@ await app.register(fastifyCookie, { secret: config.SESSION_SECRET });
 await app.register(fastifyWebsocket);
 await app.register(fastifyStatic, { root: resolve('public'), prefix: '/' });
 app.get('/healthz', async () => ({ status: 'ok' }));
-await registerAuthRoutes(app);
 app.get<{ Querystring: { token?: string } }>('/overlay', async (request, reply) => {
   const token = request.query.token;
   if (!token || !verifyOverlayToken(token, config.SESSION_SECRET)) return reply.code(401).send({ error: 'Invalid overlay token' });
@@ -33,16 +32,26 @@ app.get<{ Querystring: { token?: string } }>('/overlay', async (request, reply) 
 });
 
 const tokenRow = db.prepare('SELECT user_id, reward_id FROM tokens ORDER BY rowid LIMIT 1').get() as { user_id: string; reward_id: string | null } | undefined;
+const twitchConfigured = Boolean(config.TWITCH_CLIENT_ID && config.TWITCH_CLIENT_SECRET);
+const connectedTokenRow = twitchConfigured ? tokenRow : undefined;
+if (!twitchConfigured) {
+  app.log.info('Twitch credentials are not configured; set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET, then connect at /auth/twitch.');
+} else if (!tokenRow && !config.DEV_MODE) {
+  app.log.info('No Twitch channel is connected; open /auth/twitch to connect a streamer.');
+}
 let referee: RefereeService | null = null;
 let eventsub: EventSubClient | null = null;
-if (tokenRow || config.DEV_MODE) {
+let connectedUserId: string | null = null;
+async function connectChannel(userId: string, rewardId: string, connected: boolean): Promise<void> {
+  if (connectedUserId && connectedUserId !== 'dev-channel') return;
+  if (referee?.channelUserId === userId) return;
+  referee?.stop();
+  eventsub?.stop();
   try {
-    const userId = tokenRow?.user_id ?? 'dev-channel';
-    const rewardId = tokenRow ? tokenRow.reward_id ?? await ensureReward(userId) : 'dev-reward';
-    eventsub = new EventSubClient({
+    const nextEventSub = new EventSubClient({
       userId,
       broadcasterId: userId,
-      getAccessToken: () => tokenRow ? getValidToken(userId) : Promise.resolve(''),
+      getAccessToken: () => connected ? getValidToken(userId) : Promise.resolve(''),
     });
     const demoHelix = {
       updateRedemptionStatus: async (...args: unknown[]) => { app.log.info({ call: 'updateRedemptionStatus', args }, 'Demo Helix no-op'); },
@@ -55,25 +64,40 @@ if (tokenRow || config.DEV_MODE) {
       getStream: async () => null,
       createPoll: async () => ({ id: `demo-poll-${Date.now()}` }),
     };
-    referee = new RefereeService({
+    const nextReferee = new RefereeService({
       userId,
       rewardId,
-      eventsub,
+      eventsub: nextEventSub,
       db,
-      helix: tokenRow ? { updateRedemptionStatus, sendChatMessage, pinChatMessage, unpinChatMessage, createClip, getClip, createStreamMarker, getStream, createPoll } : demoHelix,
+      helix: connected ? { updateRedemptionStatus, sendChatMessage, pinChatMessage, unpinChatMessage, createClip, getClip, createStreamMarker, getStream, createPoll } : demoHelix,
       ai: config.REFEREE_MOCK
         ? { parseDare: mockParseDare, judgeTick: createMockJudge(), transcribeChunk: async () => '' }
         : { parseDare, judgeTick, transcribeChunk },
     });
-    referee.start();
-    if (tokenRow) eventsub.start();
+    nextReferee.start();
+    referee = nextReferee;
+    eventsub = nextEventSub;
+    connectedUserId = connected ? userId : 'dev-channel';
+    if (connected) nextEventSub.start();
   } catch (error) {
     app.log.error({ error }, 'Could not start Twitch referee');
+    if (!referee) connectedUserId = null;
   }
 }
-await registerApiRoutes(app, referee, config.SESSION_SECRET, config.DEV_MODE);
-await registerCaptureRoutes(app, referee);
-await registerDevRoutes(app, referee, config.DEV_MODE);
+if (connectedTokenRow) {
+  try {
+    const rewardId = connectedTokenRow.reward_id ?? await ensureReward(connectedTokenRow.user_id);
+    await connectChannel(connectedTokenRow.user_id, rewardId, true);
+  } catch (error) {
+    app.log.error({ error }, 'Could not initialize the connected Twitch channel');
+  }
+} else if (config.DEV_MODE) {
+  await connectChannel('dev-channel', 'dev-reward', false);
+}
+await registerAuthRoutes(app, { onConnected: (userId, rewardId) => connectChannel(userId, rewardId, true) });
+await registerApiRoutes(app, () => referee, config.SESSION_SECRET, config.DEV_MODE);
+await registerCaptureRoutes(app, () => referee);
+await registerDevRoutes(app, () => referee, config.DEV_MODE);
 app.addHook('onClose', async () => {
   referee?.stop();
   eventsub?.stop();

@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts & node scripts/build-ui.mjs --watch",
     "build": "tsc && node scripts/build-ui.mjs",
+    "start": "node --no-warnings=ExperimentalWarning dist/server.js",
     "test": "node --no-warnings=ExperimentalWarning --import tsx --test",
     "lint": "tsc --noEmit"
   },

@@ -228,8 +228,19 @@ export class EventSubClient extends EventEmitter {
       { type: 'stream.online', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },
       { type: 'stream.offline', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },
     ];
-    const token = await this.options.getAccessToken();
-    await Promise.all(subscriptions.map((subscription) => this.subscribeRequest(token, subscription)));
+    let token: string;
+    try {
+      token = await this.options.getAccessToken();
+    } catch (error) {
+      console.error('EventSub could not obtain an access token for subscriptions', error);
+      return;
+    }
+    const results = await Promise.allSettled(subscriptions.map((subscription) => this.subscribeRequest(token, subscription)));
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`EventSub subscription failed for ${subscriptions[index]!.type}`, result.reason);
+      }
+    });
   }
 
   private armKeepaliveTimeout(socket: WebSocket | null): void {

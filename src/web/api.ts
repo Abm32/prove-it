@@ -19,8 +19,12 @@ function serviceUnavailable(reply: FastifyReply): FastifyReply {
   return reply.code(503).send({ error: 'Referee is not connected' });
 }
 
-export async function registerApiRoutes(app: FastifyInstance, service: RefereeService | null, sessionSecret: string, devMode = false): Promise<void> {
+type ServiceSource = RefereeService | null | (() => RefereeService | null);
+function getService(source: ServiceSource): RefereeService | null { return typeof source === 'function' ? source() : source; }
+
+export async function registerApiRoutes(app: FastifyInstance, source: ServiceSource, sessionSecret: string, devMode = false): Promise<void> {
   app.get<{ Querystring: TokenQuery }>('/api/state', async (request, reply) => {
+    const service = getService(source);
     if (!service) return serviceUnavailable(reply);
     const tokenUid = request.query.token ? verifyOverlayToken(request.query.token, sessionSecret) : null;
     const uid = tokenUid ?? cookieUid(request) ?? (devMode ? service.channelUserId : null);
@@ -29,6 +33,7 @@ export async function registerApiRoutes(app: FastifyInstance, service: RefereeSe
   });
 
   app.post('/api/dare/veto', async (request, reply) => {
+    const service = getService(source);
     if (!service) return serviceUnavailable(reply);
     if (cookieUid(request) !== service.channelUserId) return unauthorized(reply);
     await service.veto();
@@ -36,6 +41,7 @@ export async function registerApiRoutes(app: FastifyInstance, service: RefereeSe
   });
 
   app.post('/api/dare/skip', async (request, reply) => {
+    const service = getService(source);
     if (!service) return serviceUnavailable(reply);
     if (cookieUid(request) !== service.channelUserId) return unauthorized(reply);
     await service.skip();
@@ -43,6 +49,7 @@ export async function registerApiRoutes(app: FastifyInstance, service: RefereeSe
   });
 
   app.post<{ Body: PauseBody }>('/api/pause', async (request, reply) => {
+    const service = getService(source);
     if (!service) return serviceUnavailable(reply);
     if (cookieUid(request) !== service.channelUserId) return unauthorized(reply);
     if (typeof request.body?.paused !== 'boolean') return reply.code(400).send({ error: 'paused must be a boolean' });
@@ -51,6 +58,7 @@ export async function registerApiRoutes(app: FastifyInstance, service: RefereeSe
   });
 
   app.get<{ Querystring: DaresQuery }>('/api/dares', async (request, reply) => {
+    const service = getService(source);
     if (!service) return serviceUnavailable(reply);
     if (cookieUid(request) !== service.channelUserId) return unauthorized(reply);
     const parsed = request.query.limit === undefined ? 50 : Number(request.query.limit);
@@ -59,6 +67,7 @@ export async function registerApiRoutes(app: FastifyInstance, service: RefereeSe
   });
 
   app.get<{ Querystring: TokenQuery }>('/ws/overlay', { websocket: true }, (socket, request) => {
+    const service = getService(source);
     const wsUid = request.query.token ? verifyOverlayToken(request.query.token, sessionSecret) : cookieUid(request);
     if (!service || (wsUid !== service.channelUserId && !(devMode && !wsUid))) {
       socket.close(1008, 'Unauthorized');

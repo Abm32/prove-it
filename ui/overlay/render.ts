@@ -13,9 +13,6 @@ export class OverlayRenderer {
   private audio: AudioContext | null = null;
   private jitter = 0;
   private lastMarkupKey = '';
-  private durationDareId: number | null = null;
-  private estimatedDurationSec = 120;
-  private durationEstimated = false;
 
   constructor(root: HTMLElement, private readonly query: OverlayQuery) {
     this.root = root;
@@ -29,16 +26,6 @@ export class OverlayRenderer {
 
   render(state: OverlayState, now: number, connected: boolean, receivedAt: number): void {
     const view = stateToView(state, now);
-    if (view.dareId !== this.durationDareId) {
-      this.durationDareId = view.dareId;
-      this.estimatedDurationSec = 120;
-      this.durationEstimated = false;
-    }
-    if (view.mode === 'active' && view.dareId !== null && !this.durationEstimated) {
-      const remainingSec = Math.max(0, view.remainingMs / 1000);
-      this.estimatedDurationSec = Math.max(30, Math.min(180, remainingSec));
-      this.durationEstimated = true;
-    }
     if (view.evidence !== this.previousEvidence) {
       if (this.previousEvidence) this.evidenceHistory = [this.previousEvidence, ...this.evidenceHistory].slice(0, 2);
       this.previousEvidence = view.evidence;
@@ -59,7 +46,7 @@ export class OverlayRenderer {
     const bounty = view.bounty || '1000 PTS';
     const ringColor = seconds < 10 ? 'var(--fail)' : seconds < 30 ? 'var(--amber)' : 'var(--volt)';
     const ringProgress = active
-      ? Math.min(1, Math.max(0, seconds / this.estimatedDurationSec))
+      ? Math.min(1, Math.max(0, seconds / view.durationSec))
       : 0;
     const queue = view.queue.map((item) => `<span class="queue-pill"><b>NEXT</b> · @${escape(item.viewerLogin)} · ${escape(item.bounty)}</span>`).join('');
     const evidenceHistory = this.evidenceHistory.map((line) => `<div class="prior-evidence">${escape(line)}</div>`).join('');

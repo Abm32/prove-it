@@ -53,6 +53,7 @@ export interface RefereePublicState {
     kind: string;
     bountyPoints: number;
     bountyBits: number;
+    durationSec: number;
     deadlineAt: number | null;
     appealCount: number;
     appealThreshold: number;
@@ -65,6 +66,7 @@ export interface RefereePublicState {
   queue: Array<{ id: number; text: string; title: string; viewerLogin: string; bountyBits: number; bountyPoints: number }>;
   leaderboard: Array<{ viewer_id: string; viewer_login: string; viewer_name: string; dare_count: number; bits: number; points: number }>;
   passRate: number;
+  dareCount: number;
   lastClipUrl: string | null;
   paused: boolean;
 }
@@ -362,6 +364,7 @@ export class RefereeService {
       SUM(CASE WHEN verdict = 'PASS' THEN 1 ELSE 0 END) AS passed
       FROM dares WHERE status IN ('FINAL_PASS', 'FINAL_FAIL')`).get() as { total: number; passed: number | null };
     const lastClip = this.options.db.prepare(`SELECT clip_url FROM dares WHERE clip_url IS NOT NULL ORDER BY decided_at DESC LIMIT 1`).get() as { clip_url: string } | undefined;
+    const dareCount = (this.options.db.prepare('SELECT COUNT(*) AS total FROM dares WHERE channel_id = ?').get(this.options.userId) as { total: number }).total;
     const latest = current?.history.at(-1);
     return {
       current: current ? {
@@ -373,6 +376,7 @@ export class RefereeService {
         kind: current.dare.kind,
         bountyPoints: current.dare.bountyPoints,
         bountyBits: current.dare.bountyBits,
+        durationSec: current.dare.durationSec,
         deadlineAt: current.deadlineAt,
         appealCount: current.appeals.length,
         appealThreshold: current.options.appealThreshold,
@@ -385,6 +389,7 @@ export class RefereeService {
       queue,
       leaderboard,
       passRate: totals.total ? (totals.passed ?? 0) / totals.total : 0,
+      dareCount,
       lastClipUrl: this.lastClipUrl ?? lastClip?.clip_url ?? null,
       paused: this.paused,
     };

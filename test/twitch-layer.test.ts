@@ -24,6 +24,29 @@ test('EventSub welcome requests the subscription set and keepalive is accepted',
   assert.equal(client.sessionId, 'session-1');
 });
 
+test('EventSub logs an individual subscription failure and continues subscribing', async () => {
+  const requested: string[] = [];
+  const errors: unknown[][] = [];
+  const previousError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args); };
+  try {
+    const client = new EventSubClient({
+      userId: 'bot-1',
+      broadcasterId: 'broadcaster-1',
+      getAccessToken: async () => 'access-token',
+      subscribe: async (_token, sub) => {
+        requested.push(sub.type);
+        if (sub.type === 'channel.cheer') throw new Error('mock subscription failure');
+      },
+    });
+    await assert.doesNotReject(client.handleMessage(await fixture('eventsub-welcome.json')));
+  } finally {
+    console.error = previousError;
+  }
+  assert.equal(requested.length, 6);
+  assert.ok(errors.some((args) => String(args[0]).includes('channel.cheer')));
+});
+
 test('EventSub emits each supported notification once by message id', async () => {
   const client = new EventSubClient({ userId: 'bot-1', broadcasterId: 'broadcaster-1', getAccessToken: async () => 'token' });
   const received: string[] = [];

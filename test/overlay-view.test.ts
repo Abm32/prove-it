@@ -9,12 +9,14 @@ test('remainingMs clamps at zero and uses server deadline', () => {
 });
 
 test('stateToView maps idle, active, appeal and poll states', () => {
-  const base: OverlayState = { current: null, status: 'IDLE', remainingMs: 0, latestTick: null, queue: [], passRate: 0.71, lastClipUrl: null };
+  const base: OverlayState = { current: null, status: 'IDLE', remainingMs: 0, latestTick: null, queue: [], dareCount: 12, passRate: 0.71, lastClipUrl: null };
   assert.equal(stateToView(base, 0).mode, 'idle');
-  const current = { id: 1, title: 'Touch nose', viewerLogin: 'viewer', status: 'ACTIVE', bountyBits: 0, bountyPoints: 1000, deadlineAt: 10_000, appealCount: 0, appealThreshold: 3, appealRemainingMs: 0, pollRemainingMs: 0 };
+  const current = { id: 1, title: 'Touch nose', viewerLogin: 'viewer', status: 'ACTIVE', bountyBits: 0, bountyPoints: 1000, durationSec: 60, deadlineAt: 10_000, appealCount: 0, appealThreshold: 3, appealRemainingMs: 0, pollRemainingMs: 0 };
   const active = stateToView({ ...base, current, latestTick: { progress: .5, confidence: .8, evidence: 'Visible' } }, 1000);
   assert.equal(active.mode, 'active');
   assert.equal(active.seconds, 9);
+  assert.equal(active.durationSec, 60);
+  assert.equal(active.dareCount, 12);
   assert.equal(active.evidence, 'Visible');
   assert.equal(stateToView({ ...base, current: { ...current, status: 'APPEAL' } }, 0).mode, 'appeal');
   assert.equal(stateToView({ ...base, current: { ...current, status: 'POLL' } }, 0).mode, 'poll');

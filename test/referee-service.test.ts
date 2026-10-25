@@ -99,6 +99,22 @@ test('redemption queues, starts, and passes after two qualifying ticks with orde
   assert.equal(row.clip_url, 'https://clips.twitch.tv/clip-1');
 });
 
+test('public state exposes active duration, total dare count, and pass rate', async () => {
+  const { service, clock } = setup(undefined, [passTick(1), passTick(2)]);
+  await service.onRedemption(redemption('first dare'));
+  assert.equal(service.getPublicState().current?.durationSec, 30);
+  assert.equal(service.getPublicState().dareCount, 1);
+  assert.equal(service.getPublicState().passRate, 0);
+  clock.advance(1000);
+  await service.runTick();
+  clock.advance(1000);
+  await service.runTick();
+  clock.advance(30_001);
+  await service.advance();
+  assert.equal(service.getPublicState().passRate, 1);
+  assert.equal(service.getPublicState().dareCount, 1);
+});
+
 test('rejected redemption is refunded and is not inserted', async () => {
   const { service, calls, db } = setup({
     'dangerous dare': { ok: false, reason: 'That challenge is unsafe.' },
