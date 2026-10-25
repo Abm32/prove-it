@@ -1,6 +1,9 @@
 node_modules/
 dist/
-data/
-.env
-*.log
-.DS_Store
+data/*.db
+data/*.db-shm
+data/*.db-wal
+public/dash/main.js
+public/dash/main.js.map
+public/overlay/main.js
+public/overlay/main.js.map

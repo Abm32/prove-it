@@ -1,0 +1,30 @@
+{
+  "name": "prove-it",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "tsx watch src/server.ts & node scripts/build-ui.mjs --watch",
+    "build": "tsc && node scripts/build-ui.mjs",
+    "test": "node --import tsx --test",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/static": "^8.2.0",
+    "@fastify/websocket": "^11.2.0",
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.6.0",
+    "openai": "^5.20.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.18.6",
+    "esbuild": "^0.25.10",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  }
+}
