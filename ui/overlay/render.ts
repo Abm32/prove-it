@@ -38,7 +38,7 @@ export class OverlayRenderer {
     const age = Math.max(0, now - receivedAt);
     const seconds = Math.max(0, view.remainingMs - (view.mode === 'active' ? 0 : age)) / 1000;
     const elapsedStamp = this.stampAt ? now - this.stampAt : 0;
-    const clipVisible = verdict && elapsedStamp >= 4000 && view.label.includes('PASS') && !!view.clipUrl;
+    const receiptVisible = verdict && elapsedStamp >= 4000 && view.label.includes('PASS') && (!!view.clipUrl || view.markerSaved);
     const active = view.mode === 'active';
     const confidence = Math.max(0, Math.min(100, Math.round(view.confidence * 100 + (active ? this.jitter : 0))));
     const displayEvidence = view.evidence.slice(0, Math.max(0, Math.floor((now - this.evidenceChangedAt) / 20)));
@@ -53,13 +53,13 @@ export class OverlayRenderer {
     const statusBar = view.mode === 'appeal'
       ? `<div class="state-bar appeal"><strong>TYPE !APPEAL TO OVERRULE</strong><span class="bar-timer">${escape(view.appeals)} · ${seconds.toFixed(1)}s</span><i style="transform:scaleX(${Math.max(0, Math.min(1, seconds / 30))})"></i></div>`
       : view.mode === 'poll'
-        ? `<div class="state-bar poll"><strong>CHAT IS VOTING · OVERRULE THE REF?</strong><span class="bar-timer">${seconds.toFixed(1)}s</span><i style="transform:scaleX(${Math.max(0, Math.min(1, seconds / 60))})"></i></div>` : '';
-    const stamp = verdict ? `<div class="stamp-wrap ${isPass ? 'is-pass' : 'is-fail'}"><div class="stamp ${view.finalPass ? 'overruled' : ''}">${view.finalPass ? 'OVERRULED → PROVED IT' : isPass ? 'PROVED IT' : 'FAILED'}</div></div>${clipVisible ? `<a class="receipt" href="${escape(view.clipUrl!)}" target="_blank" rel="noreferrer">📎 CLIP SAVED · ${escape(truncateMiddle(view.clipUrl!, 56))}</a>` : ''}` : '';
+      ? `<div class="state-bar poll"><strong>CHAT IS VOTING · OVERRULE THE REF?</strong><span class="bar-timer">${view.pollVotes.overrule} OVERRULE · ${view.pollVotes.uphold} UPHOLD · ${seconds.toFixed(1)}s</span><i style="transform:scaleX(${Math.max(0, Math.min(1, seconds / 60))})"></i></div>` : '';
+    const stamp = verdict ? `<div class="stamp-wrap ${isPass ? 'is-pass' : 'is-fail'}"><div class="stamp ${view.finalPass ? 'overruled' : ''}">${view.finalPass ? 'OVERRULED → PROVED IT' : isPass ? 'PROVED IT' : 'FAILED'}</div></div>${receiptVisible ? view.clipUrl ? `<a class="receipt" href="${escape(view.clipUrl)}" target="_blank" rel="noreferrer">📎 CLIP SAVED · ${escape(truncateMiddle(view.clipUrl, 56))}</a>` : `<div class="receipt">📍 MARKER SAVED</div>` : ''}` : '';
     const idle = view.mode === 'idle' ? `<div class="idle-pill"><span class="live-dot"></span><strong>DARE ME · 1000 PTS</strong><span class="idle-stats">PASS RATE ${Math.round(view.passRate * 100)}% · ${view.dareCount} DARES</span></div>` : '';
     const incoming = view.mode === 'queued' ? `<div class="incoming-pill">🎯 DARE QUEUED <span>@${escape(view.viewer)}</span> · ${escape(view.title)}</div>` : '';
     this.root.dataset.mode = view.mode;
     this.root.classList.toggle('shake', verdict && elapsedStamp < 250);
-    const markupKey = JSON.stringify([view.mode, view.dareId, view.label, view.title, view.viewer, view.bounty, view.evidence, queue, view.appeals, view.clipUrl, clipVisible, idle, incoming, connected, view.passRate, view.dareCount, view.finalPass]);
+    const markupKey = JSON.stringify([view.mode, view.dareId, view.label, view.title, view.viewer, view.bounty, view.evidence, queue, view.appeals, view.clipUrl, view.markerSaved, receiptVisible, view.pollVotes, idle, incoming, connected, view.passRate, view.dareCount, view.finalPass]);
     if (markupKey !== this.lastMarkupKey) {
     this.lastMarkupKey = markupKey;
     this.root.innerHTML = `<div class="reconnect ${connected ? '' : 'down'}"><i></i>${connected ? '' : 'RECONNECTING'}</div>${idle}${incoming}${view.mode !== 'idle' && view.mode !== 'queued' ? `<section class="fight-card ${verdict ? 'has-verdict' : ''}">
@@ -76,7 +76,7 @@ export class OverlayRenderer {
     if (ring) { ring.style.setProperty('--ring-progress', `${ringProgress * 360}deg`); ring.style.setProperty('--ring-color', ringColor); ring.classList.toggle('urgent', active && seconds < 10); const whole = ring.querySelector('strong'); const tenth = ring.querySelector('small'); if (whole) whole.textContent = String(Math.max(0, Math.floor(seconds))); if (tenth) tenth.textContent = `.${String(Math.floor((seconds % 1) * 10)).padStart(1, '0')}s`; }
     const needle = this.root.querySelector<HTMLElement>('.needle'); if (needle) needle.style.left = `${confidence}%`;
     const meterLabel = this.root.querySelector<HTMLElement>('.meter-label strong'); if (meterLabel) meterLabel.textContent = `REF CONFIDENCE ${confidence}%`;
-    const barTimer = this.root.querySelector<HTMLElement>('.bar-timer'); if (barTimer) barTimer.textContent = view.mode === 'appeal' ? `${view.appeals} · ${seconds.toFixed(1)}s` : `${seconds.toFixed(1)}s`;
+    const barTimer = this.root.querySelector<HTMLElement>('.bar-timer'); if (barTimer) barTimer.textContent = view.mode === 'appeal' ? `${view.appeals} · ${seconds.toFixed(1)}s` : `${view.pollVotes.overrule} OVERRULE · ${view.pollVotes.uphold} UPHOLD · ${seconds.toFixed(1)}s`;
     const bar = this.root.querySelector<HTMLElement>('.state-bar i'); if (bar) bar.style.transform = `scaleX(${Math.max(0, Math.min(1, seconds / (view.mode === 'appeal' ? 30 : 60)))})`;
     const evidence = this.root.querySelector<HTMLElement>('.evidence'); if (evidence) { const typed = view.evidence.slice(0, Math.max(0, Math.floor((now - this.evidenceChangedAt) / 20))); evidence.innerHTML = `${escape(typed)}<b class="caret">▌</b>`; }
     this.sound(view, now);

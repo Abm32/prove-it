@@ -13,7 +13,8 @@ export function migrate(database: DatabaseSync): void {
       refresh_token TEXT NOT NULL,
       scopes TEXT NOT NULL,
       expires_at INTEGER NOT NULL,
-      reward_id TEXT
+      reward_id TEXT,
+      broadcaster_type TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS dares (
@@ -58,6 +59,10 @@ export function migrate(database: DatabaseSync): void {
       PRIMARY KEY (dare_id, viewer_id)
     );
   `);
+  const tokenColumns = database.prepare('PRAGMA table_info(tokens)').all() as Array<{ name: string }>;
+  if (!tokenColumns.some((column) => column.name === 'broadcaster_type')) {
+    database.exec("ALTER TABLE tokens ADD COLUMN broadcaster_type TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 const databasePath = resolve(config.DATABASE_PATH);

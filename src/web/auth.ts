@@ -1,13 +1,15 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { config } from '../config.js';
 import { getUsers } from '../twitch/helix.js';
+import { capabilitiesFor } from '../twitch/capabilities.js';
 import { buildAuthorizeUrl, exchangeCode, validateAccessToken, verifyOAuthState } from '../twitch/oauth.js';
 import { ensureReward } from '../twitch/setup.js';
-import { saveToken } from '../twitch/tokenStore.js';
+import { saveToken, setBroadcasterType } from '../twitch/tokenStore.js';
 import { createOverlayToken } from './overlayToken.js';
+import type { ChannelCapabilities } from '../twitch/capabilities.js';
 
 export interface AuthRouteOptions {
-  onConnected?: (userId: string, rewardId: string) => Promise<void> | void;
+  onConnected?: (userId: string, rewardId: string | null, capabilities: ChannelCapabilities) => Promise<void> | void;
 }
 
 interface AuthQuery {
@@ -43,9 +45,15 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
         scopes: exchanged.scope,
         expiresAt: Date.now() + exchanged.expires_in * 1000,
         rewardId: null,
+        broadcasterType: '',
       });
+      const twitchUser = (await getUsers(identity.user_id, [identity.user_id]))[0];
+      const broadcasterType = twitchUser?.broadcaster_type ?? '';
+      setBroadcasterType(identity.user_id, broadcasterType);
       const rewardId = await ensureReward(identity.user_id);
-      await options.onConnected?.(identity.user_id, rewardId);
+      const detected = capabilitiesFor(broadcasterType);
+      const capabilities = rewardId ? detected : capabilitiesFor('');
+      await options.onConnected?.(identity.user_id, rewardId, capabilities);
       reply.setCookie('uid', identity.user_id, {
         signed: true,
         httpOnly: true,
@@ -55,8 +63,10 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
         maxAge: 30 * 24 * 60 * 60,
       });
       return reply.redirect('/dash');
-    } catch {
-      return callbackError(reply, 'Twitch could not complete sign-in. Check your app credentials and try again.', 502);
+    } catch (caught) {
+      const err = caught instanceof Error ? caught : new Error(String(caught));
+      request.log.error({ err }, 'twitch callback failed');
+      return callbackError(reply, err.message, 502);
     }
   });
 
@@ -66,8 +76,11 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
     const users = await getUsers(cookie.value, [cookie.value]);
     const user = users[0];
     if (!user) return reply.code(401).send({ error: 'not_connected' });
+    setBroadcasterType(cookie.value, user.broadcaster_type);
     const rewardId = await ensureReward(cookie.value);
+    const detected = capabilitiesFor(user.broadcaster_type);
+    const capabilities = rewardId ? detected : capabilitiesFor('');
     const overlayUrl = `${config.PUBLIC_URL.replace(/\/$/, '')}/overlay?token=${encodeURIComponent(createOverlayToken(cookie.value, config.SESSION_SECRET))}`;
-    return { login: user.login, display_name: user.display_name, avatarUrl: user.profile_image_url, rewardId, rewardCost: config.DARE_COST_POINTS };
+    return { login: user.login, display_name: user.display_name, avatarUrl: user.profile_image_url, overlayUrl, rewardId, rewardCost: config.DARE_COST_POINTS, capabilities, mode: capabilities.mode };
   });
 }

@@ -94,6 +94,7 @@ export interface TwitchUser {
   login: string;
   display_name: string;
   profile_image_url: string;
+  broadcaster_type: '' | 'affiliate' | 'partner';
 }
 
 export async function getUsers(userId: string, ids: string[]): Promise<TwitchUser[]> {

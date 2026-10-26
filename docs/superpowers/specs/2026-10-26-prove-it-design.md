@@ -13,6 +13,7 @@ Viewers spend Channel Points or Bits to post a dare ("no-scope in the next 2 min
 - Rides the Build-Week winner pattern: model interprets, deterministic code enforces, human (jury) override at the consequential moment.
 
 ## Scope (ship this, nothing more)
+- Support every broadcaster type: Affiliate/Partner channels use Channel Points, Bits, Twitch Polls, and Clips; non-Affiliate channels use free chat dares, a chat jury, and stream markers.
 ### Streamer side
 1. Dashboard at `/dash`: "Connect Twitch" (OAuth, scopes below) → shows channel, creates the Channel Point reward "Dare the streamer" (cost configurable, default 1000) → gives the overlay URL to paste into OBS → start/stop referee.
 2. Referee input: streamer adds a second OBS output? No. Simplest: the dashboard page captures the stream via `getDisplayMedia` (screen/window + system audio) in the browser. Frames sampled 1/s (downscaled 640px), audio transcribed with gpt-realtime-whisper (or Web Speech API fallback). ponytail: browser capture, no OBS plugin. Upgrade later: OBS virtual cam / RTMP tap.

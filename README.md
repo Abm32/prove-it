@@ -17,10 +17,23 @@ The OBS overlay makes the action visible with a countdown, referee confidence me
 
 ## Twitch surfaces
 
+### Works on any channel
+
+PROVE IT reads `broadcaster_type` after OAuth and chooses the available entry and receipt surfaces. Affiliate features remain the preferred experience; non-Affiliate channels get the full dare, verdict, and jury loop through chat.
+
+| Feature | Affiliate+ | Any channel |
+| --- | --- | --- |
+| Submit a dare | Channel Points reward or Bits `!dare` | Free `!dare <challenge>` |
+| Appeal a FAIL | Twitch Poll after `!appeal` threshold | Chat jury: `!overrule` / `!uphold` |
+| PASS receipt | Clip plus stream marker when live | Stream marker when live |
+| Bounty and queue priority | Points and Bits; higher Bits jump the queue | Free dares, ordered by arrival |
+
+Chat mode limits each viewer to one queued dare at a time. The referee still uses the same deterministic verdict rules in both modes.
+
 | Viewer/streamer action | Twitch surface |
 | --- | --- |
 | Create and fulfill/refund the “Dare the streamer” reward | Helix Channel Points custom rewards and redemptions |
-| Receive redemptions, chat, cheers, polls, and live status | EventSub WebSocket: `channel.channel_points_custom_reward_redemption.add`, `channel.chat.message`, `channel.cheer`, `channel.poll.end`, `stream.online`, `stream.offline` |
+| Receive redemptions, chat, cheers, poll progress/results, and live status | EventSub WebSocket: `channel.channel_points_custom_reward_redemption.add`, `channel.chat.message`, `channel.cheer`, `channel.poll.progress`, `channel.poll.end`, `stream.online`, `stream.offline` |
 | Announce dares and verdicts | Helix Send Chat Message |
 | Keep the active dare visible in chat | Helix Pinned Chat Messages (best effort) |
 | Save proof after a pass | Helix Create Clip and Get Clip |

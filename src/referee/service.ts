@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { config } from '../config.js';
-import type { ChatMessageEvent, EventSubClient, PollEndEvent, RedemptionEvent } from '../twitch/eventsub.js';
+import type { ChatMessageEvent, EventSubClient, PollEndEvent, PollProgressEvent, RedemptionEvent } from '../twitch/eventsub.js';
 import { parseChatMessage } from '../twitch/parseChat.js';
+import type { ChannelCapabilities } from '../twitch/capabilities.js';
 import type { ParsedDare, ParsedDareSuccess } from '../ai/dareParser.js';
 import type { JudgeTickInput } from '../ai/vision.js';
 import { appeal as machineAppeal, advance as advanceMachine, createDareMachine, resolvePoll, start as startMachine, tick as machineTick, veto as machineVeto } from './machine.js';
@@ -34,7 +35,8 @@ export interface RefereeClock {
 
 export interface RefereeServiceOptions {
   userId: string;
-  rewardId: string;
+  rewardId: string | null;
+  capabilities: ChannelCapabilities;
   eventsub: EventSubClient;
   db: DatabaseSync;
   helix: RefereeHelix;
@@ -68,6 +70,8 @@ export interface RefereePublicState {
   passRate: number;
   dareCount: number;
   lastClipUrl: string | null;
+  lastMarker: boolean;
+  poll: { kind: 'twitch' | 'chat'; overrule: number; uphold: number; endsAt: number } | null;
   paused: boolean;
 }
 
@@ -105,8 +109,13 @@ export class RefereeService {
   private currentMetadata: DareMetadata | null = null;
   private pollId: string | null = null;
   private pollStartedAt: number | null = null;
+  private pollKind: 'twitch' | 'chat' | null = null;
+  private pollVotes = new Map<string, 'overrule' | 'uphold'>();
+  private pollCounts = { overrule: 0, uphold: 0 };
+  private readonly pendingChatDares = new Set<string>();
   private finalVisibleUntil: number | null = null;
   private lastClipUrl: string | null = null;
+  private lastMarker = false;
   private paused = false;
   private pausedAt: number | null = null;
   private started = false;
@@ -130,6 +139,7 @@ export class RefereeService {
     this.options.eventsub.on('redemption', (event) => { void this.onRedemption(event).catch(() => undefined); });
     this.options.eventsub.on('chatMessage', (event) => { void this.onChatMessage(event).catch(() => undefined); });
     this.options.eventsub.on('pollEnd', (event) => { void this.onPollEnd(event).catch(() => undefined); });
+    this.options.eventsub.on('pollProgress', (event) => { this.onPollProgress(event); });
     this.tickTimer = this.clock.setInterval(() => { void this.runTick().catch(() => undefined); }, this.tickMs);
     this.advanceTimer = this.clock.setInterval(() => { void this.advance().catch(() => undefined); }, 500);
     void this.startNext().catch(() => undefined);
@@ -164,32 +174,58 @@ export class RefereeService {
   }
 
   async onChatMessage(event: ChatMessageEvent): Promise<void> {
-    const parsedMessage = parseChatMessage(event);
+    const parsedMessage = parseChatMessage(event, { requireBits: this.options.capabilities.bits });
     if (parsedMessage?.kind === 'dare') {
-      await this.createDare({
-        viewerId: event.chatter_user_id,
-        viewerLogin: event.chatter_user_login,
-        viewerName: event.chatter_user_name,
-        text: parsedMessage.text,
-        bountyPoints: 0,
-        bountyBits: parsedMessage.bits,
-        redemptionId: null,
-        redemptionRewardId: null,
-      });
+      const isFreeChatDare = !this.options.capabilities.bits;
+      if (isFreeChatDare && this.hasQueuedDare(event.chatter_user_id)) {
+        await this.sendChat('You already have a dare queued');
+        return;
+      }
+      if (isFreeChatDare) this.pendingChatDares.add(event.chatter_user_id);
+      try {
+        await this.createDare({
+          viewerId: event.chatter_user_id,
+          viewerLogin: event.chatter_user_login,
+          viewerName: event.chatter_user_name,
+          text: parsedMessage.text,
+          bountyPoints: 0,
+          bountyBits: this.options.capabilities.bits ? parsedMessage.bits : 0,
+          redemptionId: null,
+          redemptionRewardId: null,
+        });
+      } finally {
+        if (isFreeChatDare) this.pendingChatDares.delete(event.chatter_user_id);
+      }
       return;
     }
     if (parsedMessage?.kind === 'appeal') await this.submitAppeal(event.chatter_user_id);
+    if (parsedMessage?.kind === 'vote') this.submitChatVote(event.chatter_user_id, parsedMessage.choice);
   }
 
   async onPollEnd(event: PollEndEvent): Promise<void> {
-    if (!this.current || this.current.status !== 'POLL' || !this.pollId || event.id !== this.pollId) return;
+    if (!this.current || this.current.status !== 'POLL' || this.pollKind !== 'twitch' || !this.pollId || event.id !== this.pollId) return;
     const overruleVotes = event.choices
       .filter((choice) => choice.title.toLowerCase().startsWith('overrule'))
       .reduce((sum, choice) => sum + choice.votes, 0);
     const upholdVotes = event.choices
       .filter((choice) => choice.title.toLowerCase().startsWith('uphold'))
       .reduce((sum, choice) => sum + choice.votes, 0);
-    this.current = resolvePoll(this.current, overruleVotes > upholdVotes, this.clock.now());
+    this.pollCounts = { overrule: overruleVotes, uphold: upholdVotes };
+    await this.finishPoll(overruleVotes > upholdVotes, this.clock.now());
+  }
+
+  onPollProgress(event: PollProgressEvent): void {
+    if (!this.current || this.current.status !== 'POLL' || this.pollKind !== 'twitch' || event.id !== this.pollId) return;
+    this.pollCounts = {
+      overrule: event.choices.filter((choice) => choice.title.toLowerCase().startsWith('overrule')).reduce((sum, choice) => sum + choice.votes, 0),
+      uphold: event.choices.filter((choice) => choice.title.toLowerCase().startsWith('uphold')).reduce((sum, choice) => sum + choice.votes, 0),
+    };
+    this.broadcast();
+  }
+
+  private async finishPoll(majorityOverrule: boolean, now: number): Promise<void> {
+    if (!this.current || this.current.status !== 'POLL') return;
+    this.current = resolvePoll(this.current, majorityOverrule, now);
     this.persistMachine(this.current);
     if (this.current.status === 'FINAL_PASS') {
       await this.settlePass(true);
@@ -286,6 +322,10 @@ export class RefereeService {
       await this.startNext();
       return;
     }
+    if (this.current.status === 'POLL' && this.pollKind === 'chat' && this.pollStartedAt !== null && now >= this.pollStartedAt + 60_000) {
+      await this.finishPoll(this.pollCounts.overrule > this.pollCounts.uphold, now);
+      return;
+    }
     if ((this.current.status === 'FINAL_PASS' || this.current.status === 'FINAL_FAIL') && this.finalVisibleUntil !== null) {
       if (now >= this.finalVisibleUntil) {
         await this.completeCurrent();
@@ -336,6 +376,7 @@ export class RefereeService {
         deadlineAt: this.current.deadlineAt === null ? null : this.current.deadlineAt + duration,
         decidedAt: this.current.decidedAt === null ? null : this.current.decidedAt + duration,
       };
+      if (this.pollStartedAt !== null) this.pollStartedAt += duration;
       this.persistMachine(this.current);
       this.pausedAt = null;
     } else {
@@ -390,7 +431,14 @@ export class RefereeService {
       leaderboard,
       passRate: totals.total ? (totals.passed ?? 0) / totals.total : 0,
       dareCount,
-      lastClipUrl: this.lastClipUrl ?? lastClip?.clip_url ?? null,
+      lastClipUrl: this.lastMarker ? this.lastClipUrl : this.lastClipUrl ?? lastClip?.clip_url ?? null,
+      lastMarker: this.lastMarker,
+      poll: current?.status === 'POLL' && this.pollKind && this.pollStartedAt !== null ? {
+        kind: this.pollKind,
+        overrule: this.pollCounts.overrule,
+        uphold: this.pollCounts.uphold,
+        endsAt: this.pollStartedAt + 60_000,
+      } : null,
       paused: this.paused,
     };
   }
@@ -463,6 +511,10 @@ export class RefereeService {
     this.failEffectsDone = false;
     this.pollId = null;
     this.pollStartedAt = null;
+    this.pollKind = null;
+    this.pollVotes.clear();
+    this.pollCounts = { overrule: 0, uphold: 0 };
+    this.lastMarker = false;
     this.finalVisibleUntil = null;
     this.current = startMachine(createDareMachine(dare), this.clock.now());
     this.options.db.prepare('UPDATE dares SET status = ?, started_at = ?, deadline_at = ? WHERE id = ?')
@@ -484,13 +536,35 @@ export class RefereeService {
     }
     this.persistMachine(this.current);
     if (this.current.status === 'POLL') {
-      const poll = await this.options.helix.createPoll(this.options.userId, this.options.userId,
-        `Overrule the ref on dare #${this.current.dare.id}?`, ["Overrule — it's a PASS", 'Uphold — FAIL stands'], 60);
-      this.pollId = poll.id;
       this.pollStartedAt = this.clock.now();
-      this.options.db.prepare('UPDATE dares SET poll_id = ? WHERE id = ?').run(poll.id, this.current.dare.id);
-      await this.sendChat(`🗳️ Appeal poll is live for dare #${this.current.dare.id}.`);
+      this.pollCounts = { overrule: 0, uphold: 0 };
+      this.pollVotes.clear();
+      if (this.options.capabilities.polls) {
+        const poll = await this.options.helix.createPoll(this.options.userId, this.options.userId,
+          `Overrule the ref on dare #${this.current.dare.id}?`, ["Overrule — it's a PASS", 'Uphold — FAIL stands'], 60);
+        this.pollId = poll.id;
+        this.pollKind = 'twitch';
+        this.options.db.prepare('UPDATE dares SET poll_id = ? WHERE id = ?').run(poll.id, this.current.dare.id);
+        await this.sendChat(`🗳️ Appeal poll is live for dare #${this.current.dare.id}.`);
+      } else {
+        this.pollId = `chat:${this.current.dare.id}`;
+        this.pollKind = 'chat';
+        this.options.db.prepare('UPDATE dares SET poll_id = ? WHERE id = ?').run(this.pollId, this.current.dare.id);
+        await this.sendChat('Jury time! 60s: type !overrule to flip the call or !uphold to keep it.');
+      }
     }
+    this.broadcast();
+  }
+
+  private hasQueuedDare(viewerId: string): boolean {
+    return this.pendingChatDares.has(viewerId) || this.queue.preview(this.queue.size).some((dare) => dare.viewerId === viewerId);
+  }
+
+  private submitChatVote(viewerId: string, choice: 'overrule' | 'uphold'): void {
+    if (!this.current || this.current.status !== 'POLL' || this.pollKind !== 'chat') return;
+    this.pollVotes.set(viewerId, choice);
+    this.pollCounts = { overrule: 0, uphold: 0 };
+    for (const vote of this.pollVotes.values()) this.pollCounts[vote] += 1;
     this.broadcast();
   }
 
@@ -508,28 +582,31 @@ export class RefereeService {
     let live = false;
     try { live = Boolean(await this.options.helix.getStream(this.options.userId, this.options.userId)); } catch { live = false; }
     if (live) {
+      if (this.options.capabilities.clips) {
+        try {
+          const clip = await this.options.helix.createClip(this.options.userId, this.options.userId);
+          clipId = clip.id;
+          const ready = await this.options.helix.getClip(this.options.userId, clip.id);
+          clipUrl = ready?.url ?? null;
+        } catch { /* Clip creation is best-effort; the verdict remains final. */ }
+      }
       try {
-        const clip = await this.options.helix.createClip(this.options.userId, this.options.userId);
-        clipId = clip.id;
-        const ready = await this.options.helix.getClip(this.options.userId, clip.id);
-        clipUrl = ready?.url ?? null;
-      } catch { /* Clip creation is best-effort; the verdict remains final. */ }
+        await this.options.helix.createStreamMarker(this.options.userId, this.options.userId,
+          `PROVE IT #${dare.id} PASS: ${this.currentMetadata.title}`);
+        this.lastMarker = true;
+      } catch { /* Markers require a live stream and enabled VOD. */ }
     } else {
-      evidence = `${evidence}${evidence ? ' ' : ''}No live stream available; no clip created.`.slice(0, 240);
+      evidence = `${evidence}${evidence ? ' ' : ''}No live stream available; no marker created.`.slice(0, 240);
       const history = [...this.current.history];
       const latest = history.at(-1);
       if (latest) history[history.length - 1] = { ...latest, evidence };
       this.current = { ...this.current, history };
     }
-    try {
-      await this.options.helix.createStreamMarker(this.options.userId, this.options.userId,
-        `PROVE IT #${dare.id} PASS: ${this.currentMetadata.title}`);
-    } catch { /* Markers require a live stream and enabled VOD. */ }
-    this.lastClipUrl = clipUrl ?? this.lastClipUrl;
+    this.lastClipUrl = clipUrl;
     this.options.db.prepare(`UPDATE dares SET status = ?, verdict = 'PASS', decided_at = ?, clip_id = ?, clip_url = ?, evidence = ? WHERE id = ?`)
       .run(this.current.status, this.current.decidedAt, clipId, clipUrl, evidence, dare.id);
     const prefix = overruled ? `⚖️ Chat overruled the ref — @${dare.viewerLogin}: ${this.currentMetadata.title}` : `✅ @${dare.viewerLogin} PROVED IT — ${this.currentMetadata.title}`;
-    await this.sendChat(`${prefix}.${clipUrl ? ` Clip: ${clipUrl}` : ''}`);
+    await this.sendChat(`${prefix}.${clipUrl ? ` Clip: ${clipUrl}` : this.lastMarker ? ' 📍 marker saved' : ''}`);
     await this.unpin();
     this.broadcast();
   }
@@ -557,6 +634,9 @@ export class RefereeService {
     this.currentMetadata = null;
     this.pollId = null;
     this.pollStartedAt = null;
+    this.pollKind = null;
+    this.pollVotes.clear();
+    this.pollCounts = { overrule: 0, uphold: 0 };
     this.redemptionSettled = false;
     this.passEffectsDone = false;
     this.failEffectsDone = false;

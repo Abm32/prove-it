@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { helix } from './helix.js';
 
 type JsonObject = Record<string, unknown>;
-type EventName = 'redemption' | 'chatMessage' | 'cheer' | 'pollEnd' | 'streamOnline' | 'streamOffline' | 'reconnect' | 'revocation';
+type EventName = 'redemption' | 'chatMessage' | 'cheer' | 'pollProgress' | 'pollEnd' | 'streamOnline' | 'streamOffline' | 'reconnect' | 'revocation';
 type EventListener = (...args: any[]) => void;
 
 export interface RedemptionEvent {
@@ -50,6 +50,8 @@ export interface PollEndEvent {
   ended_at: string;
 }
 
+export type PollProgressEvent = Pick<PollEndEvent, 'id' | 'broadcaster_user_id' | 'choices' | 'started_at'>;
+
 export interface StreamOnlineEvent { id: string; broadcaster_user_id: string; type: string; started_at: string }
 export interface StreamOfflineEvent { broadcaster_user_id: string }
 
@@ -57,6 +59,7 @@ interface EventSubEventMap {
   redemption: RedemptionEvent;
   chatMessage: ChatMessageEvent;
   cheer: CheerEvent;
+  pollProgress: PollProgressEvent;
   pollEnd: PollEndEvent;
   streamOnline: StreamOnlineEvent;
   streamOffline: StreamOfflineEvent;
@@ -83,6 +86,7 @@ const notificationEvents: Record<string, keyof EventSubEventMap> = {
   'channel.channel_points_custom_reward_redemption.add': 'redemption',
   'channel.chat.message': 'chatMessage',
   'channel.cheer': 'cheer',
+  'channel.poll.progress': 'pollProgress',
   'channel.poll.end': 'pollEnd',
   'stream.online': 'streamOnline',
   'stream.offline': 'streamOffline',
@@ -224,6 +228,7 @@ export class EventSubClient extends EventEmitter {
       { type: 'channel.channel_points_custom_reward_redemption.add', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },
       { type: 'channel.chat.message', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId, user_id: this.options.userId } },
       { type: 'channel.cheer', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },
+      { type: 'channel.poll.progress', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },
       { type: 'channel.poll.end', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },
       { type: 'stream.online', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },
       { type: 'stream.offline', version: '1', condition: { broadcaster_user_id: this.options.broadcasterId } },

@@ -4,9 +4,10 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { resolve } from 'node:path';
 import { config } from './config.js';
-import { getClip, createClip, createPoll, createStreamMarker, getStream, pinChatMessage, sendChatMessage, unpinChatMessage, updateRedemptionStatus } from './twitch/helix.js';
+import { getClip, createClip, createPoll, createStreamMarker, getStream, getUsers, pinChatMessage, sendChatMessage, unpinChatMessage, updateRedemptionStatus } from './twitch/helix.js';
 import { EventSubClient } from './twitch/eventsub.js';
-import { getValidToken } from './twitch/tokenStore.js';
+import { getValidToken, setBroadcasterType } from './twitch/tokenStore.js';
+import { capabilitiesFor, type BroadcasterType, type ChannelCapabilities } from './twitch/capabilities.js';
 import { ensureReward } from './twitch/setup.js';
 import { parseDare } from './ai/dareParser.js';
 import { judgeTick } from './ai/vision.js';
@@ -31,7 +32,7 @@ app.get<{ Querystring: { token?: string } }>('/overlay', async (request, reply) 
   return reply.sendFile('overlay/index.html');
 });
 
-const tokenRow = db.prepare('SELECT user_id, reward_id FROM tokens ORDER BY rowid LIMIT 1').get() as { user_id: string; reward_id: string | null } | undefined;
+const tokenRow = db.prepare('SELECT user_id, reward_id, broadcaster_type FROM tokens ORDER BY rowid LIMIT 1').get() as { user_id: string; reward_id: string | null; broadcaster_type: string } | undefined;
 const twitchConfigured = Boolean(config.TWITCH_CLIENT_ID && config.TWITCH_CLIENT_SECRET);
 const connectedTokenRow = twitchConfigured ? tokenRow : undefined;
 if (!twitchConfigured) {
@@ -42,7 +43,7 @@ if (!twitchConfigured) {
 let referee: RefereeService | null = null;
 let eventsub: EventSubClient | null = null;
 let connectedUserId: string | null = null;
-async function connectChannel(userId: string, rewardId: string, connected: boolean): Promise<void> {
+async function connectChannel(userId: string, rewardId: string | null, connected: boolean, capabilities: ChannelCapabilities): Promise<void> {
   if (connectedUserId && connectedUserId !== 'dev-channel') return;
   if (referee?.channelUserId === userId) return;
   referee?.stop();
@@ -67,6 +68,7 @@ async function connectChannel(userId: string, rewardId: string, connected: boole
     const nextReferee = new RefereeService({
       userId,
       rewardId,
+      capabilities,
       eventsub: nextEventSub,
       db,
       helix: connected ? { updateRedemptionStatus, sendChatMessage, pinChatMessage, unpinChatMessage, createClip, getClip, createStreamMarker, getStream, createPoll } : demoHelix,
@@ -86,15 +88,26 @@ async function connectChannel(userId: string, rewardId: string, connected: boole
 }
 if (connectedTokenRow) {
   try {
-    const rewardId = connectedTokenRow.reward_id ?? await ensureReward(connectedTokenRow.user_id);
-    await connectChannel(connectedTokenRow.user_id, rewardId, true);
+    const twitchUser = (await getUsers(connectedTokenRow.user_id, [connectedTokenRow.user_id]))[0];
+    const storedType = ['', 'affiliate', 'partner'].includes(connectedTokenRow.broadcaster_type)
+      ? connectedTokenRow.broadcaster_type as BroadcasterType
+      : '';
+    const broadcasterType = twitchUser?.broadcaster_type ?? storedType;
+    setBroadcasterType(connectedTokenRow.user_id, broadcasterType);
+    const detected = capabilitiesFor(broadcasterType);
+    const rewardId = detected.channelPoints
+      ? connectedTokenRow.reward_id ?? await ensureReward(connectedTokenRow.user_id)
+      : null;
+    const capabilities = rewardId ? detected : capabilitiesFor('');
+    await connectChannel(connectedTokenRow.user_id, rewardId, true, capabilities);
   } catch (error) {
     app.log.error({ error }, 'Could not initialize the connected Twitch channel');
   }
 } else if (config.DEV_MODE) {
-  await connectChannel('dev-channel', 'dev-reward', false);
+  await connectChannel('dev-channel', 'dev-reward', false, capabilitiesFor('partner'));
 }
-await registerAuthRoutes(app, { onConnected: (userId, rewardId) => connectChannel(userId, rewardId, true) });
+await registerAuthRoutes(app, { onConnected: (userId, rewardId, detected) => connectChannel(userId, rewardId, true,
+  rewardId ? detected : capabilitiesFor('')) });
 await registerApiRoutes(app, () => referee, config.SESSION_SECRET, config.DEV_MODE);
 await registerCaptureRoutes(app, () => referee);
 await registerDevRoutes(app, () => referee, config.DEV_MODE);

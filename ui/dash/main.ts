@@ -10,7 +10,7 @@ interface State {
 
 const app = document.querySelector<HTMLElement>('#app');
 if (app) app.innerHTML = `
-  <header><div><p class="eyebrow">PROVE IT / CONTROL ROOM</p><h1>Stream referee</h1></div><span id="connection" class="pill">Connecting…</span></header>
+    <header><div><p class="eyebrow">PROVE IT / CONTROL ROOM</p><h1>Stream referee</h1></div><div class="header-pills"><span id="mode-pill" class="pill">— MODE</span><span id="connection" class="pill">Connecting…</span></div></header>
   <main>
     <nav class="onboarding" aria-label="Setup progress"><a class="step" id="step-connect" href="#connect"><span class="step-number">1</span><span><b>Connect Twitch</b><small>Authorize your channel</small></span><i>✓</i></a><span class="step-link"></span><a class="step" id="step-overlay" href="#overlay"><span class="step-number">2</span><span><b>Paste overlay URL into OBS</b><small>Browser Source · 1920 × 1080</small></span><i>✓</i></a><span class="step-link"></span><a class="step" id="step-referee" href="#referee"><span class="step-number">3</span><span><b>Start referee</b><small>Share screen and audio</small></span><i>✓</i></a></nav>
     <section class="panel" id="connect"><div class="section-head"><h2>Connect</h2><a class="button primary" href="/auth/twitch">Connect Twitch</a></div><p id="identity">Checking channel…</p><small id="reward"></small></section>
@@ -32,15 +32,19 @@ async function loadIdentity(): Promise<void> {
   try {
     const response = await fetch('/api/me', { credentials: 'include' });
     if (!response.ok) throw new Error('demo');
-    const me = await response.json() as { login: string; display_name: string; avatarUrl: string; overlayUrl: string; rewardId: string; rewardCost: number };
+    const me = await response.json() as { login: string; display_name: string; avatarUrl: string; overlayUrl: string; rewardId: string | null; rewardCost: number; mode: 'points' | 'chat'; capabilities: { channelPoints: boolean; bits: boolean; clips: boolean; polls: boolean; mode: 'points' | 'chat' } };
     const identity = $('#identity');
     identity.replaceChildren();
     const avatar = document.createElement('img'); avatar.src = me.avatarUrl; avatar.alt = ''; avatar.width = 38; avatar.height = 38; avatar.style.cssText = 'border-radius:50%;vertical-align:middle;margin-right:10px';
     identity.append(avatar, document.createTextNode(`${me.display_name} (@${me.login})`));
-    $('#reward').textContent = `Channel Points reward ready · ${me.rewardCost.toLocaleString()} pts · ${me.rewardId}`;
+    $('#mode-pill').textContent = me.mode === 'chat' ? 'CHAT MODE' : 'POINTS MODE';
+    $('#reward').textContent = me.mode === 'chat'
+      ? 'Chat mode — channel is not Affiliate. Viewers type !dare <challenge> (free). Jury runs in chat (!overrule / !uphold). Receipts are stream markers.'
+      : `Channel Points reward ready · ${me.rewardCost.toLocaleString()} pts · ${me.rewardId}`;
     ($('#overlay-url') as HTMLInputElement).value = me.overlayUrl;
     updateSteps(true);
   } catch {
+    $('#mode-pill').textContent = 'NO CHANNEL';
     $('#identity').textContent = 'No Twitch channel connected. Demo endpoints are available when DEV_MODE=true.';
     $('#reward').textContent = 'Reward cost: configured in DARE_COST_POINTS.';
   }

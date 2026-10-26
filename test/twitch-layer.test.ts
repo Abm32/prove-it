@@ -20,7 +20,7 @@ test('EventSub welcome requests the subscription set and keepalive is accepted',
   });
   await client.handleMessage(await fixture('eventsub-welcome.json'));
   await client.handleMessage(await fixture('eventsub-keepalive.json'));
-  assert.equal(requested.length, 6);
+  assert.equal(requested.length, 7);
   assert.equal(client.sessionId, 'session-1');
 });
 
@@ -43,22 +43,22 @@ test('EventSub logs an individual subscription failure and continues subscribing
   } finally {
     console.error = previousError;
   }
-  assert.equal(requested.length, 6);
+  assert.equal(requested.length, 7);
   assert.ok(errors.some((args) => String(args[0]).includes('channel.cheer')));
 });
 
 test('EventSub emits each supported notification once by message id', async () => {
   const client = new EventSubClient({ userId: 'bot-1', broadcasterId: 'broadcaster-1', getAccessToken: async () => 'token' });
   const received: string[] = [];
-  for (const event of ['redemption', 'chatMessage', 'cheer', 'pollEnd', 'streamOnline', 'streamOffline'] as const) {
+  for (const event of ['redemption', 'chatMessage', 'cheer', 'pollProgress', 'pollEnd', 'streamOnline', 'streamOffline'] as const) {
     client.on(event, () => received.push(event));
   }
-  for (const file of ['eventsub-redemption.json', 'eventsub-chat.json', 'eventsub-cheer.json', 'eventsub-poll-end.json', 'eventsub-stream-online.json', 'eventsub-stream-offline.json']) {
+  for (const file of ['eventsub-redemption.json', 'eventsub-chat.json', 'eventsub-cheer.json', 'eventsub-poll-progress.json', 'eventsub-poll-end.json', 'eventsub-stream-online.json', 'eventsub-stream-offline.json']) {
     const raw = await fixture(file);
     await client.handleMessage(raw);
     await client.handleMessage(raw);
   }
-  assert.deepEqual(received, ['redemption', 'chatMessage', 'cheer', 'pollEnd', 'streamOnline', 'streamOffline']);
+  assert.deepEqual(received, ['redemption', 'chatMessage', 'cheer', 'pollProgress', 'pollEnd', 'streamOnline', 'streamOffline']);
 });
 
 test('EventSub reconnect and revocation messages are surfaced', async () => {
@@ -75,10 +75,13 @@ test('EventSub reconnect and revocation messages are surfaced', async () => {
 
 test('chat parser recognizes Bits dares and plain appeals', () => {
   const base = { message: { text: '!dare no-scope in two minutes' } };
-  assert.deepEqual(parseChatMessage({ ...base, cheer: { bits: 100 } }), { kind: 'dare', text: 'no-scope in two minutes', bits: 100 });
-  assert.deepEqual(parseChatMessage({ message: { text: ' !APPEAL ' } }), { kind: 'appeal' });
-  assert.equal(parseChatMessage({ ...base, cheer: { bits: 0 } }), null);
-  assert.equal(parseChatMessage({ message: { text: '!dare   ' }, cheer: { bits: 500 } }), null);
+  assert.deepEqual(parseChatMessage({ ...base, cheer: { bits: 100 } }, { requireBits: true }), { kind: 'dare', text: 'no-scope in two minutes', bits: 100 });
+  assert.deepEqual(parseChatMessage({ message: { text: ' !APPEAL ' } }, { requireBits: true }), { kind: 'appeal' });
+  assert.deepEqual(parseChatMessage({ ...base }, { requireBits: false }), { kind: 'dare', text: 'no-scope in two minutes', bits: 0 });
+  assert.deepEqual(parseChatMessage({ message: { text: '!overrule' } }, { requireBits: false }), { kind: 'vote', choice: 'overrule' });
+  assert.deepEqual(parseChatMessage({ message: { text: '!UPHOLD' } }, { requireBits: true }), { kind: 'vote', choice: 'uphold' });
+  assert.equal(parseChatMessage({ ...base, cheer: { bits: 0 } }, { requireBits: true }), null);
+  assert.equal(parseChatMessage({ message: { text: '!dare   ' }, cheer: { bits: 500 } }, { requireBits: true }), null);
 });
 
 test('Helix refreshes after a 401 and retries exactly once', async () => {

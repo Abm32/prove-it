@@ -8,6 +8,7 @@ import type { ParsedDare } from '../src/ai/dareParser.js';
 import { migrate } from '../src/db.js';
 import { RefereeService, type RefereeClock, type RefereeHelix } from '../src/referee/service.js';
 import type { Tick } from '../src/referee/types.js';
+import { capabilitiesFor, type ChannelCapabilities } from '../src/twitch/capabilities.js';
 
 class FakeClock implements RefereeClock {
   value = 1_000_000;
@@ -17,7 +18,7 @@ class FakeClock implements RefereeClock {
   advance(milliseconds: number): void { this.value += milliseconds; }
 }
 
-function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = []) {
+function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], capabilities: ChannelCapabilities = capabilitiesFor('partner')) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   const clock = new FakeClock();
@@ -43,6 +44,7 @@ function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = []) {
   const service = new RefereeService({
     userId: 'streamer-1',
     rewardId: 'reward-1',
+    capabilities,
     eventsub: eventsub as EventSubClient,
     db,
     helix,
@@ -60,6 +62,20 @@ function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = []) {
     tickMs: 2000,
   });
   return { db, clock, calls, service };
+}
+
+function chatMessage(text: string, viewerId: string, bits?: number) {
+  return {
+    message_id: `message-${viewerId}-${text}`,
+    broadcaster_user_id: 'streamer-1',
+    chatter_user_id: viewerId,
+    chatter_user_login: viewerId,
+    chatter_user_name: viewerId,
+    message: { text, fragments: [] },
+    message_type: 'text',
+    badges: [],
+    ...(bits === undefined ? {} : { cheer: { bits } }),
+  };
 }
 
 function redemption(text: string, viewerId = 'viewer-1'): RedemptionEvent {
@@ -185,6 +201,57 @@ test('Bits dares outrank queued Channel Point dares', async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(service.getPublicState().current?.viewerLogin, 'bits-viewer');
   assert.equal(service.getPublicState().current?.bountyBits, 25);
+});
+
+test('chat-mode dare without a cheer enters the queue for free', async () => {
+  const { service, db } = setup(undefined, [], capabilitiesFor(''));
+  await service.onChatMessage(chatMessage('!dare say hello', 'free-viewer'));
+  const state = service.getPublicState();
+  assert.equal(state.current?.status, 'ACTIVE');
+  assert.equal(state.current?.bountyBits, 0);
+  assert.equal(state.current?.bountyPoints, 0);
+  const row = db.prepare('SELECT bounty_points, bounty_bits FROM dares').get() as { bounty_points: number; bounty_bits: number };
+  assert.equal(row.bounty_points, 0);
+  assert.equal(row.bounty_bits, 0);
+});
+
+test('chat mode limits each viewer to one queued dare and explains the limit in chat', async () => {
+  const { service, calls } = setup(undefined, [], capabilitiesFor(''));
+  service.setPaused(true);
+  await service.onChatMessage(chatMessage('!dare first', 'repeat-viewer'));
+  await service.onChatMessage(chatMessage('!dare second', 'repeat-viewer'));
+  assert.equal(service.getPublicState().queue.length, 1);
+  assert.ok(calls.some((call) => String(call.args.at(-1)) === 'You already have a dare queued'));
+});
+
+test('chat jury uses distinct last votes and resolves an overrule after 60 seconds', async () => {
+  const { service, clock, calls } = setup(undefined, [], capabilitiesFor(''));
+  await service.onChatMessage(chatMessage('!dare say hello', 'dare-setter'));
+  clock.advance(30_000);
+  await service.advance();
+  for (const viewer of ['appeal-1', 'appeal-2', 'appeal-3']) await service.onChatMessage(chatMessage('!appeal', viewer));
+  assert.equal(service.getPublicState().current?.status, 'POLL');
+  assert.deepEqual(service.getPublicState().poll, { kind: 'chat', overrule: 0, uphold: 0, endsAt: clock.now() + 60_000 });
+  await service.onChatMessage(chatMessage('!uphold', 'voter-a'));
+  await service.onChatMessage(chatMessage('!uphold', 'voter-b'));
+  await service.onChatMessage(chatMessage('!overrule', 'voter-a'));
+  await service.onChatMessage(chatMessage('!overrule', 'voter-c'));
+  assert.deepEqual(service.getPublicState().poll && { overrule: service.getPublicState().poll!.overrule, uphold: service.getPublicState().poll!.uphold }, { overrule: 2, uphold: 1 });
+  clock.advance(60_000);
+  await service.advance();
+  assert.equal(service.getPublicState().current?.status, 'FINAL_PASS');
+  assert.equal(calls.some((call) => call.name === 'create-poll'), false);
+});
+
+test('chat-mode pass saves a marker without creating a clip', async () => {
+  const { service, calls } = setup(undefined, [passTick(1), passTick(2)], capabilitiesFor(''));
+  await service.onChatMessage(chatMessage('!dare wave', 'free-viewer'));
+  await service.runTick();
+  await service.runTick();
+  assert.equal(service.getPublicState().lastMarker, true);
+  assert.equal(calls.some((call) => call.name === 'create-clip'), false);
+  assert.ok(calls.some((call) => call.name === 'marker'));
+  assert.ok(calls.some((call) => String(call.args.at(-1)).includes('marker saved')));
 });
 
 test('validateParsedDare rejects duration outside the accepted range', () => {

@@ -19,5 +19,8 @@ test('stateToView maps idle, active, appeal and poll states', () => {
   assert.equal(active.dareCount, 12);
   assert.equal(active.evidence, 'Visible');
   assert.equal(stateToView({ ...base, current: { ...current, status: 'APPEAL' } }, 0).mode, 'appeal');
-  assert.equal(stateToView({ ...base, current: { ...current, status: 'POLL' } }, 0).mode, 'poll');
+  const poll = stateToView({ ...base, current: { ...current, status: 'POLL' }, poll: { kind: 'chat', overrule: 2, uphold: 1, endsAt: 60_000 }, lastMarker: true }, 0);
+  assert.equal(poll.mode, 'poll');
+  assert.deepEqual(poll.pollVotes, { overrule: 2, uphold: 1 });
+  assert.equal(poll.markerSaved, true);
 });
