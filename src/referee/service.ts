@@ -72,6 +72,8 @@ export interface RefereePublicState {
   dareCount: number;
   lastClipUrl: string | null;
   lastMarker: boolean;
+  captureActive: boolean;
+  lastFrameAt: number | null;
   poll: { kind: 'twitch' | 'chat'; overrule: number; uphold: number; endsAt: number } | null;
   paused: boolean;
 }
@@ -90,6 +92,10 @@ const systemClock: RefereeClock = {
   clearInterval: (timer) => clearInterval(timer),
 };
 
+export function isCaptureActive(lastFrameAt: number | null, now: number): boolean {
+  return lastFrameAt !== null && now >= lastFrameAt && now - lastFrameAt <= 5000;
+}
+
 function successCondition(parsed: ParsedDareSuccess): Dare['condition'] {
   return {
     type: parsed.kind,
@@ -104,6 +110,7 @@ export class RefereeService {
   private readonly listeners = new Set<(state: RefereePublicState) => void>();
   private readonly frames: Buffer[] = [];
   private readonly transcript: TranscriptChunk[] = [];
+  private lastFrameAt: number | null = null;
   private readonly clock: RefereeClock;
   private readonly tickMs: number;
   private current: DareMachine | null = null;
@@ -242,6 +249,7 @@ export class RefereeService {
   async ingestFrame(jpeg: Buffer): Promise<void> {
     this.frames.push(jpeg);
     if (this.frames.length > 3) this.frames.shift();
+    this.lastFrameAt = this.clock.now();
   }
 
   async ingestAudio(buffer: Buffer, mime: string): Promise<string> {
@@ -440,6 +448,8 @@ export class RefereeService {
       dareCount,
       lastClipUrl: this.lastMarker ? this.lastClipUrl : this.lastClipUrl ?? lastClip?.clip_url ?? null,
       lastMarker: this.lastMarker,
+      captureActive: isCaptureActive(this.lastFrameAt, this.clock.now()),
+      lastFrameAt: this.lastFrameAt,
       poll: current?.status === 'POLL' && this.pollKind && this.pollStartedAt !== null ? {
         kind: this.pollKind,
         overrule: this.pollCounts.overrule,

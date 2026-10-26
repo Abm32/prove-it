@@ -29,7 +29,7 @@ export async function registerApiRoutes(app: FastifyInstance, source: ServiceSou
     const tokenUid = request.query.token ? verifyOverlayToken(request.query.token, sessionSecret) : null;
     const uid = tokenUid ?? cookieUid(request) ?? (devMode ? service.channelUserId : null);
     if (!uid || uid !== service.channelUserId) return unauthorized(reply);
-    return service.getPublicState();
+    return { ...service.getPublicState(), devMode };
   });
 
   app.post('/api/dare/veto', async (request, reply) => {

@@ -6,7 +6,7 @@ import type { EventSubClient, PollEndEvent, RedemptionEvent } from '../src/twitc
 import { EventSubClient as EventSub } from '../src/twitch/eventsub.js';
 import type { ParsedDare } from '../src/ai/dareParser.js';
 import { migrate } from '../src/db.js';
-import { RefereeService, type RefereeClock, type RefereeHelix } from '../src/referee/service.js';
+import { isCaptureActive, RefereeService, type RefereeClock, type RefereeHelix } from '../src/referee/service.js';
 import type { Tick } from '../src/referee/types.js';
 import { capabilitiesFor, type ChannelCapabilities } from '../src/twitch/capabilities.js';
 
@@ -93,6 +93,22 @@ function redemption(text: string, viewerId = 'viewer-1'): RedemptionEvent {
 }
 
 const passTick = (at: number): Tick => ({ at, progress: 1, evidence: 'The requested action is visible', done: true, confidence: 0.95 });
+
+test('capture is active only while a frame arrived in the last five seconds', () => {
+  assert.equal(isCaptureActive(null, 10_000), false);
+  assert.equal(isCaptureActive(5_000, 10_000), true);
+  assert.equal(isCaptureActive(4_999, 10_000), false);
+  assert.equal(isCaptureActive(10_001, 10_000), false);
+});
+
+test('ingesting a frame updates the public capture timestamp and status', async () => {
+  const { service, clock } = setup();
+  await service.ingestFrame(Buffer.from([1, 2, 3]));
+  assert.equal(service.getPublicState().lastFrameAt, clock.now());
+  assert.equal(service.getPublicState().captureActive, true);
+  clock.advance(5001);
+  assert.equal(service.getPublicState().captureActive, false);
+});
 
 test('redemption queues, starts, and passes after two qualifying ticks with ordered side effects', async () => {
   const { service, clock, calls, db } = setup(undefined, [passTick(1), passTick(2)]);
