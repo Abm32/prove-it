@@ -15,6 +15,16 @@ Built for the Codex × TwitchCon Hackathon 2026. This repository is the single-c
 
 The OBS overlay makes the action visible with a countdown, referee confidence meter, evidence captions, verdict stamp, appeal/poll status, and clip receipt.
 
+### Verified live — 2026-10-26
+
+These runs used a non-Affiliate channel with Gemini and Groq free tiers.
+
+| Dare | Kind | Result | Time to verdict |
+| --- | --- | --- | --- |
+| “open a terminal and type the word banana” | Visual | PASS | 31 s |
+| “say hello chat out loud” | Audio | PASS | 12 s |
+| “open a terminal and type the word banana” (no terminal opened) | Visual | FAIL at the deadline | 60 s |
+
 ## Twitch surfaces
 
 ### Works on any channel
@@ -109,6 +119,8 @@ Set these values in `.env`:
 | `STT_BASE_URL`, `STT_MODEL` | Transcription endpoint and model (Groq `whisper-large-v3-turbo` by default) |
 | `FRAMES_PER_TICK`, `TICK_MS` | Frames sent per vision tick (default 2, range 1–3) and referee interval (default 4000 ms) |
 | `DARE_COST_POINTS` | Channel Points reward cost (default 1000) |
+| `APPEAL_THRESHOLD` | Distinct appeals needed to open a jury (default 3, minimum 1); includes the dare author |
+| `JURY_SECONDS` | Twitch Poll or chat jury duration in seconds (default 60, range 15–180) |
 | `TWITCH_EVENTSUB_WS_URL`, `TWITCH_EVENTSUB_SUB_URL` | Optional EventSub and subscription endpoint overrides for Twitch CLI |
 | `DEV_MODE`, `REFEREE_MOCK` | Local-only development routes and deterministic mock AI; keep both false in production |
 

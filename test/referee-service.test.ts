@@ -18,7 +18,7 @@ class FakeClock implements RefereeClock {
   advance(milliseconds: number): void { this.value += milliseconds; }
 }
 
-function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], capabilities: ChannelCapabilities = capabilitiesFor('partner')) {
+function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], capabilities: ChannelCapabilities = capabilitiesFor('partner'), refereeOptions: { appealThreshold?: number; jurySeconds?: number } = {}) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   const clock = new FakeClock();
@@ -62,6 +62,7 @@ function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], c
     },
     clock,
     tickMs: 2000,
+    ...refereeOptions,
   });
   return { db, clock, calls, service, get transcriptions() { return transcriptions; }, setTranscriptResult(value: string) { transcriptResult = value; } };
 }
@@ -276,6 +277,29 @@ test('chat jury uses distinct last votes and resolves an overrule after 60 secon
   await service.advance();
   assert.equal(service.getPublicState().current?.status, 'FINAL_PASS');
   assert.equal(calls.some((call) => call.name === 'create-poll'), false);
+});
+
+test('threshold one opens the jury after the dare author appeals', async () => {
+  const { service, clock } = setup(undefined, [], capabilitiesFor(''), { appealThreshold: 1, jurySeconds: 15 });
+  await service.onChatMessage(chatMessage('!dare say hello', 'dare-setter'));
+  clock.advance(30_000);
+  await service.advance();
+  await service.onChatMessage(chatMessage('!appeal', 'dare-setter'));
+  assert.equal(service.getPublicState().current?.appealCount, 1);
+  assert.equal(service.getPublicState().current?.status, 'POLL');
+  assert.equal(service.getPublicState().poll?.endsAt, clock.now() + 15_000);
+});
+
+test('chat jury sends its ten-second reminder once', async () => {
+  const { service, clock, calls } = setup(undefined, [], capabilitiesFor(''), { appealThreshold: 1, jurySeconds: 15 });
+  await service.onChatMessage(chatMessage('!dare say hello', 'dare-setter'));
+  clock.advance(30_000);
+  await service.advance();
+  await service.onChatMessage(chatMessage('!appeal', 'appealing-viewer'));
+  clock.advance(5_000);
+  await service.advance();
+  await service.advance();
+  assert.equal(calls.filter((call) => String(call.args.at(-1)) === '10s left — !overrule or !uphold').length, 1);
 });
 
 test('chat-mode pass saves a marker without creating a clip', async () => {

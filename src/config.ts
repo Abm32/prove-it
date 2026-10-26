@@ -18,6 +18,8 @@ const envSchema = z.object({
   STT_MODEL: z.string().min(1).default('whisper-large-v3-turbo'),
   FRAMES_PER_TICK: z.coerce.number().int().min(1).max(3).default(2),
   DARE_COST_POINTS: z.coerce.number().int().positive().default(1000),
+  APPEAL_THRESHOLD: z.coerce.number().int().min(1).default(3),
+  JURY_SECONDS: z.coerce.number().int().min(15).max(180).default(60),
   TICK_MS: z.coerce.number().int().positive().default(4000),
   TWITCH_EVENTSUB_WS_URL: z.string().url().default('wss://eventsub.wss.twitch.tv/ws'),
   TWITCH_EVENTSUB_SUB_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),

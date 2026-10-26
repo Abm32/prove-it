@@ -1,19 +1,20 @@
-# PROVE IT demo video shot list (2:55)
+# PROVE IT demo video script (2:55)
 
-Keep the overlay large and legible in the capture. Use `scripts/demo.sh` / `?demo=1` for deterministic shots if the live channel or clip wait is unreliable. Suggested on-screen captions are in quotation marks.
+Film the verified chat-mode path on a non-Affiliate channel. The dares are free chat commands; the channel jury votes in chat; successful dares receive a stream marker instead of a clip. Gemini handles dare parsing and vision, and Groq transcribes audio on their free tiers. Put the dashboard’s **Ref hears** line in frame during the audio example.
 
 | Time | Picture / action | On-screen caption / narration |
 | --- | --- | --- |
-| 0:00–0:10 | Open on a live game view. A Channel Points redemption arrives; the fight card expands with the dare and countdown. | **“Chat doesn’t just watch. Chat dares.”** |
-| 0:10–0:40 | Show the confidence meter moving and evidence captions updating. Streamer completes the challenge; PASS stamp lands. Cut to chat message and the clip receipt/marker. | **“A ref watches the same screen and audio as the audience.”** Then **“Two clear ticks. PASS. Clip saved.”** |
-| 0:40–1:10 | Present a second dare that times out. Show FAIL, `!appeal`, three appeals, then the Twitch Poll. Poll overrules; final stamp changes. | **“The model proposes. The rules decide.”** Then **“Chat is the jury.”** |
-| 1:10–1:30 | Dashboard walkthrough: Connect Twitch, copy overlay URL, paste into OBS Browser Source, click Start referee, select display and tick Share system audio. | **“One OAuth click. One browser source. Share the stream.”** |
-| 1:30–2:30 | Show repo and Codex build process: `AGENTS.md`, Twitch EventSub skill, state-machine tests, and a terminal red/green test run. Briefly show the architecture diagram in README. | **“Built in one Codex thread. Typed Twitch events, mocked integrations, deterministic referee tests.”** |
-| 2:30–2:55 | Return to overlay/dashboard leaderboard and pass rate. End on PROVE IT title, then next direction. | **“Every dare gets a call. Every pass gets a receipt.”** End card: **“Next: rival chats dare each other in Stream Together.”** |
+| 0:00–0:12 | Open on the stream and chat. Type `!dare open a terminal and type the word banana`; show the dare card appear and countdown begin. | **“Any channel can start a dare in chat.”** |
+| 0:12–0:43 | Show the streamer open a terminal and type banana. Include the confidence meter and evidence, then the PASS stamp and chat receipt with the stream marker. | **“Gemini reads the captured frames. Two qualifying ticks make a pass.”** **“Marker saved at the moment.”** |
+| 0:43–1:03 | Show `!dare say hello chat out loud`, speak the words, and briefly show Dashboard’s Ref hears transcript line before the audio PASS. | **“Groq transcribes the mic. The referee shows what it heard.”** |
+| 1:03–1:38 | Submit the banana dare again but do not open a terminal. Show the deadline FAIL, the dare author typing `!appeal`, jury prompt, distinct chat voters using `!overrule` / `!uphold`, 10-second reminder, and final result. | **“A deadline fails. Chat can review the call.”** **“The author can appeal too.”** |
+| 1:38–1:55 | Quick dashboard view: chat-mode instructions, capture status, overlay URL. Open `/overlay/?demo=1` as a stand-in and label it clearly; show its idle badge as the Channel Points path preview. | **“Live run: chat mode on a non-Affiliate channel.”** **“Channel Points preview: local overlay demo stand-in.”** |
+| 1:55–2:40 | Codex-build segment: show `AGENTS.md`, `.agents/skills/twitch-eventsub/SKILL.md`, `docs/codex-log.md` with 13 dated task entries, `docs/CODEX_SESSION.md`, and terminal output from `npm test` passing. | **“Built and tested in one Codex session.”** **“Typed Twitch events. Pure referee rules. Stubbed integration tests.”** |
+| 2:40–2:55 | Return to the live overlay and chat receipt. End on PROVE IT title. | **“Chat dares. The ref calls it. The stream keeps the receipt.”** |
 
 ## Capture notes
 
-- Record 1920×1080. Use the overlay URL directly in OBS, with the browser source set to 1920×1080.
-- For the setup shot, show the browser share picker and the **Share system audio** checkbox.
-- If using demo mode, use `http://localhost:3000/overlay/?demo=1` for the cycling overlay and `scripts/demo.sh` for state transitions. A demo pass has no live stream, so it intentionally shows no real clip.
-- Keep captions short and avoid showing OAuth secrets, `.env`, access tokens, or the session secret.
+- Record at 1920×1080 and keep the overlay and dashboard transcript line readable.
+- In the capture picker, select the game/display and microphone. The app mixes mic and display audio into one recording track.
+- For a predictable overlay shot, use `http://localhost:3000/overlay/?demo=1`; label this as a local stand-in, not a live Channel Points redemption.
+- Avoid recording `.env`, API keys, OAuth tokens, or session secrets.

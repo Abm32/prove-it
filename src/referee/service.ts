@@ -44,6 +44,8 @@ export interface RefereeServiceOptions {
   ai: RefereeAi;
   clock?: RefereeClock;
   tickMs?: number;
+  appealThreshold?: number;
+  jurySeconds?: number;
 }
 
 export interface RefereePublicState {
@@ -115,6 +117,8 @@ export class RefereeService {
   private lastTranscript: { text: string; at: number } | null = null;
   private readonly clock: RefereeClock;
   private readonly tickMs: number;
+  private readonly appealThreshold: number;
+  private readonly jurySeconds: number;
   private current: DareMachine | null = null;
   private currentMetadata: DareMetadata | null = null;
   private pollId: string | null = null;
@@ -122,6 +126,7 @@ export class RefereeService {
   private pollKind: 'twitch' | 'chat' | null = null;
   private pollVotes = new Map<string, 'overrule' | 'uphold'>();
   private pollCounts = { overrule: 0, uphold: 0 };
+  private pollReminderSent = false;
   private readonly pendingChatDares = new Set<string>();
   private finalVisibleUntil: number | null = null;
   private lastClipUrl: string | null = null;
@@ -139,6 +144,8 @@ export class RefereeService {
   constructor(private readonly options: RefereeServiceOptions) {
     this.clock = options.clock ?? systemClock;
     this.tickMs = options.tickMs ?? config.TICK_MS;
+    this.appealThreshold = options.appealThreshold ?? config.APPEAL_THRESHOLD;
+    this.jurySeconds = options.jurySeconds ?? config.JURY_SECONDS;
   }
 
   get channelUserId(): string { return this.options.userId; }
@@ -342,9 +349,16 @@ export class RefereeService {
       await this.startNext();
       return;
     }
-    if (this.current.status === 'POLL' && this.pollKind === 'chat' && this.pollStartedAt !== null && now >= this.pollStartedAt + 60_000) {
-      await this.finishPoll(this.pollCounts.overrule > this.pollCounts.uphold, now);
-      return;
+    if (this.current.status === 'POLL' && this.pollStartedAt !== null) {
+      const juryEndsAt = this.pollStartedAt + this.jurySeconds * 1000;
+      if (this.pollKind === 'chat' && !this.pollReminderSent && now >= juryEndsAt - 10_000 && now < juryEndsAt) {
+        this.pollReminderSent = true;
+        await this.sendChat('10s left — !overrule or !uphold');
+      }
+      if (this.pollKind === 'chat' && now >= juryEndsAt) {
+        await this.finishPoll(this.pollCounts.overrule > this.pollCounts.uphold, now);
+        return;
+      }
     }
     if ((this.current.status === 'FINAL_PASS' || this.current.status === 'FINAL_FAIL') && this.finalVisibleUntil !== null) {
       if (now >= this.finalVisibleUntil) {
@@ -442,7 +456,7 @@ export class RefereeService {
         appealCount: current.appeals.length,
         appealThreshold: current.options.appealThreshold,
         appealRemainingMs: current.decidedAt === null ? 0 : Math.max(0, current.decidedAt + current.options.appealWindowSec * 1000 - this.clock.now()),
-        pollRemainingMs: this.pollStartedAt === null ? 0 : Math.max(0, this.pollStartedAt + 60_000 - this.clock.now()),
+        pollRemainingMs: this.pollStartedAt === null ? 0 : Math.max(0, this.pollStartedAt + this.jurySeconds * 1000 - this.clock.now()),
       } : null,
       status: current?.status ?? 'IDLE',
       remainingMs: current?.deadlineAt === null || current?.deadlineAt === undefined ? 0 : Math.max(0, current.deadlineAt - (this.paused ? this.pausedAt ?? this.clock.now() : this.clock.now())),
@@ -460,7 +474,7 @@ export class RefereeService {
         kind: this.pollKind,
         overrule: this.pollCounts.overrule,
         uphold: this.pollCounts.uphold,
-        endsAt: this.pollStartedAt + 60_000,
+        endsAt: this.pollStartedAt + this.jurySeconds * 1000,
       } : null,
       paused: this.paused,
     };
@@ -535,11 +549,12 @@ export class RefereeService {
     this.pollId = null;
     this.pollStartedAt = null;
     this.pollKind = null;
+    this.pollReminderSent = false;
     this.pollVotes.clear();
     this.pollCounts = { overrule: 0, uphold: 0 };
     this.lastMarker = false;
     this.finalVisibleUntil = null;
-    this.current = startMachine(createDareMachine(dare), this.clock.now());
+    this.current = startMachine(createDareMachine(dare, { appealThreshold: this.appealThreshold }), this.clock.now());
     this.options.db.prepare('UPDATE dares SET status = ?, started_at = ?, deadline_at = ? WHERE id = ?')
       .run(this.current.status, this.current.startedAt, this.current.deadlineAt, dare.id);
     const title = this.currentMetadata?.title ?? dare.text;
@@ -560,11 +575,12 @@ export class RefereeService {
     this.persistMachine(this.current);
     if (this.current.status === 'POLL') {
       this.pollStartedAt = this.clock.now();
+      this.pollReminderSent = false;
       this.pollCounts = { overrule: 0, uphold: 0 };
       this.pollVotes.clear();
       if (this.options.capabilities.polls) {
         const poll = await this.options.helix.createPoll(this.options.userId, this.options.userId,
-          `Overrule the ref on dare #${this.current.dare.id}?`, ["Overrule — it's a PASS", 'Uphold — FAIL stands'], 60);
+          `Overrule the ref on dare #${this.current.dare.id}?`, ["Overrule — it's a PASS", 'Uphold — FAIL stands'], this.jurySeconds);
         this.pollId = poll.id;
         this.pollKind = 'twitch';
         this.options.db.prepare('UPDATE dares SET poll_id = ? WHERE id = ?').run(poll.id, this.current.dare.id);
@@ -573,7 +589,7 @@ export class RefereeService {
         this.pollId = `chat:${this.current.dare.id}`;
         this.pollKind = 'chat';
         this.options.db.prepare('UPDATE dares SET poll_id = ? WHERE id = ?').run(this.pollId, this.current.dare.id);
-        await this.sendChat('Jury time! 60s: type !overrule to flip the call or !uphold to keep it.');
+        await this.sendChat(`Jury time! ${this.jurySeconds}s: type !overrule to flip the call or !uphold to keep it.`);
       }
     }
     this.broadcast();
@@ -658,6 +674,7 @@ export class RefereeService {
     this.pollId = null;
     this.pollStartedAt = null;
     this.pollKind = null;
+    this.pollReminderSent = false;
     this.pollVotes.clear();
     this.pollCounts = { overrule: 0, uphold: 0 };
     this.redemptionSettled = false;
