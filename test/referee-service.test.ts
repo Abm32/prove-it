@@ -23,6 +23,7 @@ function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], c
   migrate(db);
   const clock = new FakeClock();
   const calls: Array<{ name: string; args: unknown[] }> = [];
+  let transcriptions = 0;
   const record = (name: string) => async (...args: unknown[]) => { calls.push({ name, args }); };
   const helix: RefereeHelix = {
     updateRedemptionStatus: record('redemption-status'),
@@ -56,12 +57,12 @@ function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], c
         condition: { summary: text, successCriteria: text, durationSec: 30 },
       },
       judgeTick: async () => ticks.shift() ?? { at: clock.now(), progress: 0, evidence: 'No evidence', done: false, confidence: 0.2 },
-      transcribeChunk: async () => 'transcribed phrase',
+      transcribeChunk: async () => { transcriptions += 1; return 'transcribed phrase'; },
     },
     clock,
     tickMs: 2000,
   });
-  return { db, clock, calls, service };
+  return { db, clock, calls, service, get transcriptions() { return transcriptions; } };
 }
 
 function chatMessage(text: string, viewerId: string, bits?: number) {
@@ -108,6 +109,12 @@ test('ingesting a frame updates the public capture timestamp and status', async 
   assert.equal(service.getPublicState().captureActive, true);
   clock.advance(5001);
   assert.equal(service.getPublicState().captureActive, false);
+});
+
+test('audio chunks arriving while idle skip transcription', async () => {
+  const { service, transcriptions } = setup();
+  assert.equal(await service.ingestAudio(Buffer.from('audio'), 'audio/webm'), '');
+  assert.equal(transcriptions, 0);
 });
 
 test('redemption queues, starts, and passes after two qualifying ticks with ordered side effects', async () => {

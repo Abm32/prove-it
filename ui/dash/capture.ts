@@ -28,25 +28,50 @@ export async function startCapture(onStatus: (status: CaptureStatus) => void): P
   let active = true;
   let frames = 0;
   let frameStarted = Date.now();
+  const audioStream = audioTracks.length && typeof MediaRecorder !== 'undefined' ? new MediaStream(audioTracks) : null;
+  const audioMime = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : 'audio/webm';
+  let audioRecorder: MediaRecorder | null = null;
+  let audioTimer: ReturnType<typeof setInterval> | null = null;
   const stop = (): void => {
     if (!active) return;
     active = false;
     clearInterval(frameTimer);
+    if (audioTimer) clearInterval(audioTimer);
+    audioTimer = null;
     display.getTracks().forEach((track) => track.stop());
     mic?.getTracks().forEach((track) => track.stop());
     mixed?.getTracks().forEach((track) => track.stop());
-    if (recorder?.state === 'recording') recorder.stop();
+    if (audioRecorder?.state === 'recording') audioRecorder.stop();
     void audioContext?.close();
     video.srcObject = null;
     onStatus({ fps: 0, latencyMs: null, watching: false, message: 'Referee idle' });
   };
-  const recorder = audioTracks.length && typeof MediaRecorder !== 'undefined'
-    ? new MediaRecorder(new MediaStream(audioTracks), { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm' }) : null;
-  recorder?.addEventListener('dataavailable', (event) => {
-    if (!active || !event.data.size) return;
-    void event.data.arrayBuffer().then((buffer) => fetch('/api/capture/audio', { method: 'POST', credentials: 'include', headers: { 'content-type': recorder.mimeType || 'audio/webm' }, body: buffer })).catch(() => undefined);
-  });
-  recorder?.start(5000);
+  const startAudioRecorder = (): void => {
+    if (!active || !audioStream) return;
+    const recorder = new MediaRecorder(audioStream, { mimeType: audioMime });
+    audioRecorder = recorder;
+    recorder.addEventListener('dataavailable', (event) => {
+      if (!active || event.data.size < 1024) return;
+      void event.data.arrayBuffer().then((buffer) => fetch('/api/capture/audio', {
+        method: 'POST', credentials: 'include',
+        headers: { 'content-type': recorder.mimeType || audioMime },
+        body: buffer,
+      })).catch(() => undefined);
+    });
+    recorder.addEventListener('stop', () => {
+      if (audioRecorder === recorder) audioRecorder = null;
+      if (active) startAudioRecorder();
+    }, { once: true });
+    recorder.start();
+  };
+  startAudioRecorder();
+  if (audioStream) {
+    audioTimer = setInterval(() => {
+      if (active && audioRecorder?.state === 'recording') audioRecorder.stop();
+    }, 5000);
+  }
   const frameTimer = setInterval(() => {
     if (!active || video.videoWidth === 0) return;
     const scale = Math.min(1, 640 / video.videoWidth);

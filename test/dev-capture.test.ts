@@ -62,3 +62,25 @@ test('capture rejects audio over 2 MB', async () => {
   assert.equal(response.statusCode, 413);
   await app.close();
 });
+
+test('capture rejects WebM audio without an EBML header before transcription', async () => {
+  let transcriptions = 0;
+  const audioService = {
+    ...service,
+    activeDare: true,
+    ingestAudio: async () => { transcriptions += 1; return 'unexpected'; },
+  } as unknown as RefereeService;
+  const app = Fastify({ bodyLimit: 2 * 1024 * 1024 });
+  await app.register(fastifyCookie, { secret: 'test-secret' });
+  await registerCaptureRoutes(app, audioService);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/capture/audio',
+    headers: { 'content-type': 'audio/webm;codecs=opus', cookie: `uid=${encodeURIComponent(app.signCookie('channel'))}` },
+    payload: Buffer.from([0, 1, 2, 3]),
+  });
+  assert.equal(response.statusCode, 400);
+  assert.deepEqual(response.json(), { error: 'not_a_webm_file' });
+  assert.equal(transcriptions, 0);
+  await app.close();
+});
