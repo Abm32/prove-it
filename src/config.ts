@@ -12,7 +12,7 @@ const envSchema = z.object({
   TWITCH_CLIENT_SECRET: z.string().default(''),
   AI_BASE_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta/openai/'),
   AI_API_KEY: z.string().default(''),
-  AI_VISION_MODEL: z.string().min(1).default('gemini-2.5-flash-lite'),
+  AI_VISION_MODEL: z.string().min(1).default('gemini-3.5-flash-lite'),
   STT_BASE_URL: z.string().url().default('https://api.groq.com/openai/v1'),
   STT_API_KEY: z.string().default(''),
   STT_MODEL: z.string().min(1).default('whisper-large-v3-turbo'),

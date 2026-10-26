@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-import { completeJson, getVisionClient } from './client.js';
+import { completeJson, getVisionClient, warnThrottled } from './client.js';
 
 export type ParsedDareKind = 'visual' | 'audio' | 'count' | 'timed';
 
@@ -95,7 +95,8 @@ export async function parseDare(text: string): Promise<ParsedDare> {
         durationSec: result.condition.durationSec,
       },
     };
-  } catch {
+  } catch (error) {
+    warnThrottled('dare-parser', 'Dare checking is unavailable right now; refusing the dare until the provider recovers.', error);
     return { ok: false, reason: 'Dare checking is unavailable right now. Please try again shortly.' };
   }
 }

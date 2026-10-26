@@ -105,7 +105,7 @@ Set these values in `.env`:
 | `SESSION_SECRET` | Long random secret for OAuth state and signed cookies |
 | `PUBLIC_URL` | Base URL; use `http://localhost:3000` for local development |
 | `PORT`, `DATABASE_PATH` | Server port and SQLite file location |
-| `AI_BASE_URL`, `AI_VISION_MODEL` | OpenAI-compatible vision/parsing endpoint and model (Gemini `gemini-2.5-flash-lite` by default) |
+| `AI_BASE_URL`, `AI_VISION_MODEL` | OpenAI-compatible vision/parsing endpoint and model (Gemini `gemini-3.5-flash-lite` by default) |
 | `STT_BASE_URL`, `STT_MODEL` | Transcription endpoint and model (Groq `whisper-large-v3-turbo` by default) |
 | `FRAMES_PER_TICK`, `TICK_MS` | Frames sent per vision tick (default 2, range 1–3) and referee interval (default 4000 ms) |
 | `DARE_COST_POINTS` | Channel Points reward cost (default 1000) |

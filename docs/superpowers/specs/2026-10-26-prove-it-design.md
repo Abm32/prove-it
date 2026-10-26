@@ -51,7 +51,7 @@ Viewers spend Channel Points or Bits to post a dare ("no-scope in the next 2 min
 - Helix: Create Custom Reward, Update Redemption Status (fulfil/refund on reject), Send Chat Message, Pin/Unpin Chat Message, Create Clip, Create Stream Marker, Create Poll, Get Users.
 
 ## Stack (builder's call, change if Codex prefers)
-- Node 22 + TypeScript, single process: Fastify (or Hono) server, EventSub WS client, static overlay/dashboard (vanilla TS + CSS, no framework → fewer tokens, faster for Codex), SQLite via better-sqlite3 for dares/leaderboard. Official `openai` SDK against OpenAI-compatible endpoints (Gemini for vision/parsing, Groq for STT).
+- Node 22 + TypeScript, single process: Fastify (or Hono) server, EventSub WS client, static overlay/dashboard (vanilla TS + CSS, no framework → fewer tokens, faster for Codex), SQLite via better-sqlite3 for dares/leaderboard. Official `openai` SDK against OpenAI-compatible endpoints (Gemini `gemini-3.5-flash-lite` for vision/parsing, Groq for STT).
 - Env: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `AI_API_KEY`, `STT_API_KEY`, `SESSION_SECRET`, `PUBLIC_URL`.
 - Tests: node:test for the state machine, dare parser schema, verdict rule, EventSub payload handling (fixtures from Twitch CLI `twitch event trigger`).
 - Twitch CLI mock events for local dev; real channel for video.

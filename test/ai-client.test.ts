@@ -54,6 +54,16 @@ test('completeJson strips fenced JSON before parsing', async () => {
   assert.deepEqual(value, { ok: true, value: 3 });
 });
 
+test('completeJson ignores provider-specific extra message fields', async () => {
+  const response = completion('{"ok":true,"value":4}');
+  response.choices[0]!.message.extra_content = { google: { thought_signature: 'opaque-signature' } };
+  const value = await completeJson({
+    client: stubClient([response], []),
+    model: 'test-model', schema, messages: [{ role: 'system', content: 'Return JSON.' }], validate: valid,
+  });
+  assert.deepEqual(value, { ok: true, value: 4 });
+});
+
 test('completeJson rejects invalid values', async () => {
   await assert.rejects(completeJson({
     client: stubClient([completion('{"ok":true,"value":"bad"}')], []),

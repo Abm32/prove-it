@@ -4,6 +4,15 @@ import { config } from '../config.js';
 
 let visionClient: OpenAI | undefined;
 let sttClient: OpenAI | undefined;
+const warningTimes = new Map<string, number>();
+
+export function warnThrottled(key: string, message: string, error: unknown): void {
+  const now = Date.now();
+  const previous = warningTimes.get(key);
+  if (previous !== undefined && now - previous < 60_000) return;
+  warningTimes.set(key, now);
+  console.warn(message, error);
+}
 
 export interface ClientEnvironment {
   AI_API_KEY?: string;

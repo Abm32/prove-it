@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { config } from '../config.js';
+import { warnThrottled } from '../ai/client.js';
 import type { ChatMessageEvent, EventSubClient, PollEndEvent, PollProgressEvent, RedemptionEvent } from '../twitch/eventsub.js';
 import { parseChatMessage } from '../twitch/parseChat.js';
 import type { ChannelCapabilities } from '../twitch/capabilities.js';
@@ -261,14 +262,20 @@ export class RefereeService {
       this.pruneTranscript(now);
       const elapsedSec = Math.max(0, Math.floor((now - (current.startedAt ?? now)) / 1000));
       const remainingSec = Math.max(0, Math.ceil(((current.deadlineAt ?? now) - now) / 1000));
-      const value = await this.options.ai.judgeTick({
-        dare: current.dare,
-        frames: [...this.frames],
-        transcript: this.transcript.map((chunk) => chunk.text).join('\n'),
-        elapsedSec,
-        remainingSec,
-        priorEvidence: current.history.slice(-5).map((tick) => tick.evidence),
-      });
+      let value: Tick;
+      try {
+        value = await this.options.ai.judgeTick({
+          dare: current.dare,
+          frames: [...this.frames],
+          transcript: this.transcript.map((chunk) => chunk.text).join('\n'),
+          elapsedSec,
+          remainingSec,
+          priorEvidence: current.history.slice(-5).map((tick) => tick.evidence),
+        });
+      } catch (error) {
+        warnThrottled('referee-judge-tick', 'AI referee judging failed; it will retry on the next tick.', error);
+        return;
+      }
       if (!this.current || this.current.dare.id !== current.dare.id || (this.current.status !== 'ACTIVE' && this.current.status !== 'JUDGING')) return;
       await this.applyTick({ ...value, at: this.clock.now() });
     } finally {
