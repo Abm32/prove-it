@@ -1,6 +1,6 @@
 import type { Dare, Tick } from '../referee/types.js';
 import { config } from '../config.js';
-import { getOpenAIClient } from './openai.js';
+import { completeJson, getVisionClient } from './client.js';
 
 export interface JudgeTickInput {
   dare: Dare;
@@ -37,8 +37,10 @@ function validateVisionResult(value: unknown): value is VisionResult {
     && typeof result.done === 'boolean' && typeof result.evidence === 'string';
 }
 
+export { validateVisionResult };
+
 export async function judgeTick(input: JudgeTickInput): Promise<Tick> {
-  const frameParts = input.frames.slice(-3).map((frame) => ({
+  const frameParts = input.frames.slice(-config.FRAMES_PER_TICK).map((frame) => ({
     type: 'image_url' as const,
     image_url: { url: `data:image/jpeg;base64,${frame.toString('base64')}`, detail: 'low' as const },
   }));
@@ -52,9 +54,11 @@ export async function judgeTick(input: JudgeTickInput): Promise<Tick> {
     `Recent transcript: ${input.transcript || '(none)'}`,
     `Prior evidence: ${input.priorEvidence.slice(-5).join(' | ') || '(none)'}`,
   ].join('\n');
-  const completion = await getOpenAIClient().chat.completions.create({
-    model: config.OPENAI_VISION_MODEL,
-    response_format: { type: 'json_schema', json_schema: VISION_TICK_JSON_SCHEMA },
+  const result = await completeJson<VisionResult>({
+    client: getVisionClient(),
+    model: config.AI_VISION_MODEL,
+    schema: { name: VISION_TICK_JSON_SCHEMA.name, schema: VISION_TICK_JSON_SCHEMA.schema },
+    validate: validateVisionResult,
     messages: [
       {
         role: 'system',
@@ -63,10 +67,6 @@ export async function judgeTick(input: JudgeTickInput): Promise<Tick> {
       { role: 'user', content: [{ type: 'text', text: context }, ...frameParts] },
     ],
   });
-  const content = completion.choices[0]?.message.content;
-  if (!content) throw new Error('Vision model returned an empty result');
-  const result: unknown = JSON.parse(content);
-  if (!validateVisionResult(result)) throw new Error('Vision model returned an invalid tick');
   return {
     ...result,
     evidence: result.evidence.slice(0, 120),

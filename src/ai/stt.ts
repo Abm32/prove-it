@@ -1,22 +1,21 @@
 import { toFile } from 'openai/uploads';
 import { config } from '../config.js';
-import { getOpenAIClient } from './openai.js';
+import { getSttClient } from './client.js';
 
-let fallbackSelected = false;
+let lastWarningAt = 0;
 
 export async function transcribeChunk(wavOrWebm: Buffer, mime: string): Promise<string> {
-  const client = getOpenAIClient();
-  const configuredModel = config.OPENAI_STT_MODEL || 'whisper-1';
-  const file = await toFile(wavOrWebm, mime.includes('webm') ? 'chunk.webm' : 'chunk.wav', { type: mime });
-  const model = fallbackSelected ? 'whisper-1' : configuredModel;
   try {
-    const result = await client.audio.transcriptions.create({ file, model });
+    const client = getSttClient();
+    const file = await toFile(wavOrWebm, mime.includes('webm') ? 'chunk.webm' : 'chunk.wav', { type: mime });
+    const result = await client.audio.transcriptions.create({ file, model: config.STT_MODEL });
     return result.text;
   } catch (error) {
-    const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
-    if (status !== 404 || model === 'whisper-1') throw error;
-    fallbackSelected = true;
-    const fallback = await client.audio.transcriptions.create({ file, model: 'whisper-1' });
-    return fallback.text;
+    const now = Date.now();
+    if (now - lastWarningAt >= 60_000) {
+      lastWarningAt = now;
+      console.warn('Speech transcription is unavailable; referee will continue without this transcript.', error);
+    }
+    return '';
   }
 }

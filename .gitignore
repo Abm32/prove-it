@@ -7,3 +7,6 @@ public/dash/main.js
 public/dash/main.js.map
 public/overlay/main.js
 public/overlay/main.js.map
+.env
+.env.*
+!.env.example

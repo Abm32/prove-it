@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-import { getOpenAIClient } from './openai.js';
+import { completeJson, getVisionClient } from './client.js';
 
 export type ParsedDareKind = 'visual' | 'audio' | 'count' | 'timed';
 
@@ -41,7 +41,7 @@ export const DARE_PARSE_JSON_SCHEMA = {
               summary: { type: 'string' },
               successCriteria: { type: 'string' },
               countTarget: { type: ['integer', 'null'] },
-              durationSec: { type: ['integer', 'null'], minimum: 30, maximum: 180 },
+              durationSec: { type: 'integer', minimum: 30, maximum: 180 },
             },
             required: ['summary', 'successCriteria', 'countTarget', 'durationSec'],
           },
@@ -70,13 +70,13 @@ export function validateParsedDare(value: unknown): value is ParsedDare {
   return true;
 }
 
-const REJECTION_FALLBACK = 'I could not verify that dare. Try a clear challenge that can be seen or heard.';
-
 export async function parseDare(text: string): Promise<ParsedDare> {
   try {
-    const completion = await getOpenAIClient().chat.completions.create({
-      model: config.OPENAI_VISION_MODEL,
-      response_format: { type: 'json_schema', json_schema: DARE_PARSE_JSON_SCHEMA },
+    const result = await completeJson<ParsedDare>({
+      client: getVisionClient(),
+      model: config.AI_VISION_MODEL,
+      schema: { name: DARE_PARSE_JSON_SCHEMA.name, schema: DARE_PARSE_JSON_SCHEMA.schema },
+      validate: validateParsedDare,
       messages: [
         {
           role: 'system',
@@ -85,18 +85,6 @@ export async function parseDare(text: string): Promise<ParsedDare> {
         { role: 'user', content: text },
       ],
     });
-    const content = completion.choices[0]?.message.content;
-    if (!content) return { ok: false, reason: REJECTION_FALLBACK };
-    const raw: unknown = JSON.parse(content);
-    let result = raw;
-    if (raw && typeof raw === 'object' && (raw as Record<string, unknown>).ok === true) {
-      const condition = (raw as Record<string, unknown>).condition;
-      if (condition && typeof condition === 'object') {
-        const record = condition as Record<string, unknown>;
-        result = { ...(raw as Record<string, unknown>), condition: { ...record, durationSec: record.durationSec ?? 120 } };
-      }
-    }
-    if (!validateParsedDare(result)) return { ok: false, reason: REJECTION_FALLBACK };
     if (!result.ok) return { ok: false, reason: result.reason.slice(0, 180) };
     return {
       ...result,

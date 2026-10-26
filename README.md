@@ -9,7 +9,7 @@ Built for the Codex × TwitchCon Hackathon 2026. This repository is the single-c
 ## The 90-second version
 
 1. **Redeem:** chat redeems the “Dare the streamer” Channel Points reward, or sends `!dare <challenge>` with Bits.
-2. **Ref watches:** EventSub delivers the redemption/chat event. The browser capture samples one 640px-wide frame each second and sends five-second audio chunks. While a dare is active, OpenAI transcribes audio and judges up to three recent frames.
+2. **Ref watches:** EventSub delivers the redemption/chat event. The browser capture samples one 640px-wide frame each second and sends five-second audio chunks. While a dare is active, Gemini judges up to two recent frames and Groq transcribes audio.
 3. **Verdict:** the model reports progress, evidence, completion, and confidence. The state machine decides the outcome: two consecutive qualifying ticks pass; the deadline fails.
 4. **Receipt or jury:** a pass triggers a chat message, stream marker, and a clip if the stream is live. Chat can type `!appeal`; enough distinct appeals open a 60-second Twitch Poll. A poll majority can overrule the fail.
 
@@ -35,7 +35,7 @@ Browser capture (screen + audio)
             ▼
       Fastify server ──────────────── EventSub WebSocket / Helix
             │                                  ▲
-            ├──── OpenAI Vision + STT           │ actions/events
+            ├──── Gemini Vision + Groq STT      │ actions/events
             │                                  │
             ▼                                  │
  Deterministic referee state machine ──────────┘
@@ -47,7 +47,7 @@ Browser capture (screen + audio)
 
 ## Model interprets, code decides
 
-OpenAI parses the dare and reports evidence; it cannot directly issue a verdict. The parser rejects unsafe, unverifyable, or policy-violating dares, including self-harm, drinking/substances, sexual or hateful content, doxxing, spending money, and challenges that cannot be verified from the captured screen/audio. The vision judge is conservative and returns structured JSON only.
+Gemini parses the dare and reports evidence; it cannot directly issue a verdict. The parser rejects unsafe, unverifyable, or policy-violating dares, including self-harm, drinking/substances, sexual or hateful content, doxxing, spending money, and challenges that cannot be verified from the captured screen/audio. The vision judge is conservative and returns structured JSON only.
 
 The server applies the rules: PASS requires **two consecutive ticks** with `done: true` and confidence at or above 0.8. A dare that reaches its deadline fails. The streamer can veto or skip; chat can appeal a fail, and a Twitch Poll provides the jury override. Evidence is shown with each call so viewers can see what the referee used.
 
@@ -70,7 +70,9 @@ user:bot channel:bot clips:edit channel:manage:broadcast
 moderator:manage:chat_messages
 ```
 
-### 2. Configure and build
+### 2. Get free AI keys, configure, and build
+
+Get two free API keys: [Gemini](https://aistudio.google.com/apikey) and [Groq](https://console.groq.com/keys). No credit card is required for the free tiers used here. Put them in `.env` as `AI_API_KEY` and `STT_API_KEY`.
 
 Use Node 24 (Node 22.13+ is supported), then create a local environment file:
 
@@ -85,14 +87,19 @@ Set these values in `.env`:
 | Variable | Purpose |
 | --- | --- |
 | `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` | Twitch application credentials |
-| `OPENAI_API_KEY` | OpenAI API key |
+| `AI_API_KEY` | Gemini key for dare parsing and vision |
+| `STT_API_KEY` | Groq key for speech transcription; falls back to `AI_API_KEY` if empty |
 | `SESSION_SECRET` | Long random secret for OAuth state and signed cookies |
 | `PUBLIC_URL` | Base URL; use `http://localhost:3000` for local development |
 | `PORT`, `DATABASE_PATH` | Server port and SQLite file location |
-| `OPENAI_VISION_MODEL`, `OPENAI_STT_MODEL` | Vision and transcription model names |
-| `DARE_COST_POINTS`, `TICK_MS` | Reward cost (default 1000) and referee interval (default 2000 ms) |
+| `AI_BASE_URL`, `AI_VISION_MODEL` | OpenAI-compatible vision/parsing endpoint and model (Gemini `gemini-2.5-flash-lite` by default) |
+| `STT_BASE_URL`, `STT_MODEL` | Transcription endpoint and model (Groq `whisper-large-v3-turbo` by default) |
+| `FRAMES_PER_TICK`, `TICK_MS` | Frames sent per vision tick (default 2, range 1–3) and referee interval (default 4000 ms) |
+| `DARE_COST_POINTS` | Channel Points reward cost (default 1000) |
 | `TWITCH_EVENTSUB_WS_URL`, `TWITCH_EVENTSUB_SUB_URL` | Optional EventSub and subscription endpoint overrides for Twitch CLI |
 | `DEV_MODE`, `REFEREE_MOCK` | Local-only development routes and deterministic mock AI; keep both false in production |
+
+**Swap providers:** any OpenAI-compatible endpoint can be used by changing `AI_BASE_URL` and `AI_VISION_MODEL`, including OpenAI, Groq, OpenRouter, and Ollama at `http://localhost:11434/v1`. Gemini’s free tier is roughly 10–15 requests per minute, so `TICK_MS` defaults to 4000 and `FRAMES_PER_TICK` to 2.
 
 Start the built server:
 
@@ -110,7 +117,7 @@ Open [http://localhost:3000/dash](http://localhost:3000/dash), choose **Connect 
 
 ## Development and demo mode
 
-Run `npm run dev` for the TypeScript server and UI watch build. For a local, deterministic end-to-end demo with no Twitch or OpenAI credentials:
+Run `npm run dev` for the TypeScript server and UI watch build. For a local, deterministic end-to-end demo with no Twitch or AI credentials:
 
 ```sh
 scripts/demo.sh
@@ -130,7 +137,7 @@ npm run lint
 npm run build
 ```
 
-The tests use `node:test`, SQLite in memory, and hand-written EventSub fixtures; they do not contact Twitch or OpenAI.
+The tests use `node:test`, SQLite in memory, and hand-written EventSub fixtures; they do not contact Twitch, Gemini, or Groq.
 
 To exercise EventSub against the [Twitch CLI](https://dev.twitch.tv/docs/cli/), start its mock WebSocket/Helix server and point the app at it:
 
@@ -156,7 +163,7 @@ To print a fixture without a server, use `twitch event trigger <type> --transpor
 
 ## Costs
 
-Costs depend on the chosen models, prompt size, output tokens, and captured audio. As an indicative estimate using the repository defaults (`gpt-5-mini` vision at `$0.25/M` input and `$2/M` output tokens, plus `gpt-4o-mini-transcribe` at `$0.003/min`): three `detail: low` images use about 210 base image tokens for GPT-5-family models; with roughly 500–800 text input tokens and 50–100 output tokens, a referee tick is about **$0.0003–$0.0005**. At the default two-second interval, that is around **$0.009–$0.015 per active minute** for vision. Five seconds of transcribed audio adds about **$0.00025 per chunk**, or **$0.003/minute** while a dare is active. A two-minute dare is therefore roughly **3–4 cents** at these assumptions. This is a budget estimate, not a bill guarantee; check the [current OpenAI pricing](https://developers.openai.com/api/docs/pricing), [GPT-5 Mini model page](https://developers.openai.com/api/docs/models/gpt-5-mini), and [image detail guidance](https://developers.openai.com/api/docs/guides/images-vision) before a live demo. Audio transcription is requested only while a dare is active.
+**$0 on the free tiers used by default.** Provider free-tier quotas and rate limits can change, so dares may need a slower tick interval if a limit is reached.
 
 ## How we built it with Codex
 
