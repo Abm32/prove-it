@@ -24,6 +24,7 @@ function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], c
   const clock = new FakeClock();
   const calls: Array<{ name: string; args: unknown[] }> = [];
   let transcriptions = 0;
+  let transcriptResult = 'transcribed phrase';
   const record = (name: string) => async (...args: unknown[]) => { calls.push({ name, args }); };
   const helix: RefereeHelix = {
     updateRedemptionStatus: record('redemption-status'),
@@ -57,12 +58,12 @@ function setup(parsedResults?: Record<string, ParsedDare>, ticks: Tick[] = [], c
         condition: { summary: text, successCriteria: text, durationSec: 30 },
       },
       judgeTick: async () => ticks.shift() ?? { at: clock.now(), progress: 0, evidence: 'No evidence', done: false, confidence: 0.2 },
-      transcribeChunk: async () => { transcriptions += 1; return 'transcribed phrase'; },
+      transcribeChunk: async () => { transcriptions += 1; return transcriptResult; },
     },
     clock,
     tickMs: 2000,
   });
-  return { db, clock, calls, service, get transcriptions() { return transcriptions; } };
+  return { db, clock, calls, service, get transcriptions() { return transcriptions; }, setTranscriptResult(value: string) { transcriptResult = value; } };
 }
 
 function chatMessage(text: string, viewerId: string, bits?: number) {
@@ -115,6 +116,17 @@ test('audio chunks arriving while idle skip transcription', async () => {
   const { service, transcriptions } = setup();
   assert.equal(await service.ingestAudio(Buffer.from('audio'), 'audio/webm'), '');
   assert.equal(transcriptions, 0);
+});
+
+test('audio transcription updates lastTranscript but empty chunks do not overwrite it', async () => {
+  const { service, clock, setTranscriptResult } = setup();
+  await service.onRedemption(redemption('say hello'));
+  assert.equal(await service.ingestAudio(Buffer.from('audio'), 'audio/webm'), 'transcribed phrase');
+  assert.deepEqual(service.getPublicState().lastTranscript, { text: 'transcribed phrase', at: clock.now() });
+  clock.advance(1000);
+  setTranscriptResult('   ');
+  assert.equal(await service.ingestAudio(Buffer.from('silence'), 'audio/webm'), '');
+  assert.deepEqual(service.getPublicState().lastTranscript, { text: 'transcribed phrase', at: clock.now() - 1000 });
 });
 
 test('redemption queues, starts, and passes after two qualifying ticks with ordered side effects', async () => {

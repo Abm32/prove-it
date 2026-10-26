@@ -1,5 +1,5 @@
 export interface OverlayState {
-  current: null | { id: number; title: string; viewerLogin: string; status: string; bountyBits: number; bountyPoints: number; durationSec: number; deadlineAt: number | null; appealCount: number; appealThreshold: number; appealRemainingMs: number; pollRemainingMs: number };
+  current: null | { id: number; title: string; viewerLogin: string; status: string; kind?: string; bountyBits: number; bountyPoints: number; durationSec: number; deadlineAt: number | null; appealCount: number; appealThreshold: number; appealRemainingMs: number; pollRemainingMs: number };
   status: string;
   remainingMs: number;
   latestTick: null | { progress: number; confidence: number; evidence: string };
@@ -8,6 +8,7 @@ export interface OverlayState {
   dareCount: number;
   lastClipUrl: string | null;
   lastMarker?: boolean;
+  lastTranscript?: { text: string; at: number } | null;
   poll?: { kind: 'twitch' | 'chat'; overrule: number; uphold: number; endsAt: number } | null;
   leaderboard?: Array<{ viewer_login: string; dare_count: number; bits: number; points?: number }>;
 }
@@ -27,5 +28,8 @@ export function stateToView(state: OverlayState, now: number): OverlayView {
   const mode = status === 'POLL' ? 'poll' : status === 'FAIL' || status === 'APPEAL' ? 'appeal' : status === 'PASS' || status.startsWith('FINAL_') ? 'verdict' : 'active';
   const ms = mode === 'appeal' ? current.appealRemainingMs : mode === 'poll' ? current.pollRemainingMs : remainingMs(current.deadlineAt, now);
   const label = mode === 'appeal' || mode === 'poll' ? 'FAIL' : status.startsWith('FINAL_') ? status.slice(6) : status;
-  return { mode, label, title: current.title, viewer: current.viewerLogin, dareId: current.id, bounty: current.bountyBits ? `${current.bountyBits} BITS` : `${current.bountyPoints} PTS`, durationSec: current.durationSec, seconds: Math.ceil(ms / 1000), remainingMs: ms, confidence: state.latestTick?.confidence ?? 0, evidence: state.latestTick?.evidence ?? '', clipUrl: state.lastClipUrl, markerSaved: state.lastMarker ?? false, pollVotes: { overrule: state.poll?.overrule ?? 0, uphold: state.poll?.uphold ?? 0 }, appeals: `${current.appealCount}/${current.appealThreshold}`, passRate: state.passRate, dareCount, queue, finalPass: status === 'FINAL_PASS' };
+  const visionEvidence = state.latestTick?.evidence.trim() ?? '';
+  const transcript = current.kind === 'audio' && status === 'ACTIVE' && !visionEvidence ? state.lastTranscript?.text.trim() : '';
+  const evidence = visionEvidence || (transcript ? `🎙 ${transcript}` : '');
+  return { mode, label, title: current.title, viewer: current.viewerLogin, dareId: current.id, bounty: current.bountyBits ? `${current.bountyBits} BITS` : `${current.bountyPoints} PTS`, durationSec: current.durationSec, seconds: Math.ceil(ms / 1000), remainingMs: ms, confidence: state.latestTick?.confidence ?? 0, evidence, clipUrl: state.lastClipUrl, markerSaved: state.lastMarker ?? false, pollVotes: { overrule: state.poll?.overrule ?? 0, uphold: state.poll?.uphold ?? 0 }, appeals: `${current.appealCount}/${current.appealThreshold}`, passRate: state.passRate, dareCount, queue, finalPass: status === 'FINAL_PASS' };
 }

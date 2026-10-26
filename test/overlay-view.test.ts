@@ -24,3 +24,13 @@ test('stateToView maps idle, active, appeal and poll states', () => {
   assert.deepEqual(poll.pollVotes, { overrule: 2, uphold: 1 });
   assert.equal(poll.markerSaved, true);
 });
+
+test('audio dare displays the latest transcript only when vision evidence is empty', () => {
+  const base: OverlayState = {
+    current: { id: 2, title: 'Say hello', viewerLogin: 'viewer', status: 'ACTIVE', kind: 'audio', bountyBits: 0, bountyPoints: 1000, durationSec: 60, deadlineAt: 10_000, appealCount: 0, appealThreshold: 3, appealRemainingMs: 0, pollRemainingMs: 0 },
+    status: 'ACTIVE', remainingMs: 10_000, latestTick: null, queue: [], passRate: 0, dareCount: 1, lastClipUrl: null,
+    lastTranscript: { text: 'hello chat', at: 1000 },
+  };
+  assert.equal(stateToView(base, 2000).evidence, '🎙 hello chat');
+  assert.equal(stateToView({ ...base, latestTick: { progress: 0.5, confidence: 0.6, evidence: 'Mouth is moving' } }, 2000).evidence, 'Mouth is moving');
+});

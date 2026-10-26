@@ -74,6 +74,7 @@ export interface RefereePublicState {
   lastMarker: boolean;
   captureActive: boolean;
   lastFrameAt: number | null;
+  lastTranscript: { text: string; at: number } | null;
   poll: { kind: 'twitch' | 'chat'; overrule: number; uphold: number; endsAt: number } | null;
   paused: boolean;
 }
@@ -111,6 +112,7 @@ export class RefereeService {
   private readonly frames: Buffer[] = [];
   private readonly transcript: TranscriptChunk[] = [];
   private lastFrameAt: number | null = null;
+  private lastTranscript: { text: string; at: number } | null = null;
   private readonly clock: RefereeClock;
   private readonly tickMs: number;
   private current: DareMachine | null = null;
@@ -254,9 +256,12 @@ export class RefereeService {
 
   async ingestAudio(buffer: Buffer, mime: string): Promise<string> {
     if (!this.current || (this.current.status !== 'ACTIVE' && this.current.status !== 'JUDGING')) return '';
-    const text = await this.options.ai.transcribeChunk(buffer, mime);
+    const text = (await this.options.ai.transcribeChunk(buffer, mime)).trim();
+    if (!text) return '';
     const at = this.clock.now();
     this.transcript.push({ at, text });
+    this.lastTranscript = { text, at };
+    console.info('[stt]', text.slice(0, 120));
     this.pruneTranscript(at);
     return text;
   }
@@ -450,6 +455,7 @@ export class RefereeService {
       lastMarker: this.lastMarker,
       captureActive: isCaptureActive(this.lastFrameAt, this.clock.now()),
       lastFrameAt: this.lastFrameAt,
+      lastTranscript: this.lastTranscript,
       poll: current?.status === 'POLL' && this.pollKind && this.pollStartedAt !== null ? {
         kind: this.pollKind,
         overrule: this.pollCounts.overrule,

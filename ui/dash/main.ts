@@ -7,6 +7,7 @@ interface State {
   leaderboard: Array<{ viewer_login: string; dare_count: number; bits: number; points: number }>;
   passRate: number; lastClipUrl: string | null; paused: boolean;
   captureActive: boolean; lastFrameAt: number | null; devMode?: boolean;
+  lastTranscript: { text: string; at: number } | null;
 }
 
 const app = document.querySelector<HTMLElement>('#app');
@@ -16,7 +17,7 @@ if (app) app.innerHTML = `
     <nav class="onboarding" aria-label="Setup progress"><a class="step" id="step-connect" href="#connect"><span class="step-number">1</span><span><b>Connect Twitch</b><small>Authorize your channel</small></span><i>✓</i></a><span class="step-link"></span><a class="step" id="step-overlay" href="#overlay"><span class="step-number">2</span><span><b>Paste overlay URL into OBS</b><small>Browser Source · 1920 × 1080</small></span><i>✓</i></a><span class="step-link"></span><a class="step" id="step-referee" href="#referee"><span class="step-number">3</span><span><b>Start referee</b><small>Share screen and audio</small></span><i>✓</i></a></nav>
     <section class="panel" id="connect"><div class="section-head"><h2>Connect</h2><a id="connect-button" class="button primary" href="/auth/twitch">Connect Twitch</a></div><p id="connect-status" class="connect-status">Checking Twitch connection…</p><p id="identity">Connect your Twitch channel to set up PROVE IT.</p><small id="reward"></small><p id="where-chat" class="where-chat" hidden></p></section>
     <section class="panel" id="overlay"><div class="section-head"><h2>Overlay</h2><a class="preview-link" href="/overlay/?demo=1&amp;scale=0.5" target="_blank" rel="noreferrer">Preview overlay ↗</a></div><div class="url-row"><input id="overlay-url" readonly placeholder="Connect Twitch to get your overlay URL"><button id="copy-overlay">Copy URL</button></div><p class="hint">OBS → Browser Source → 1920×1080</p></section>
-    <section class="panel" id="referee"><div class="section-head"><div><h2>Referee</h2><p class="hint">Share your display and system audio. The referee samples one frame each second.</p></div><div class="referee-buttons"><button id="test-dare" class="button" hidden>Test dare</button><button id="capture-button" class="primary">Start referee</button></div></div><div id="capture-status" class="capture-status"><span class="dot"></span><span>Referee idle</span><span>0 fps</span><span>— latency</span></div></section>
+    <section class="panel" id="referee"><div class="section-head"><div><h2>Referee</h2><p class="hint">Share your display and system audio. The referee samples one frame each second.</p></div><div class="referee-buttons"><button id="test-dare" class="button" hidden>Test dare</button><button id="capture-button" class="primary">Start referee</button></div></div><div id="capture-status" class="capture-status"><span class="dot"></span><span>Referee idle</span><span>0 fps</span><span>— latency</span></div><p id="ref-hears" class="ref-hears">Ref hears: nothing yet</p></section>
     <section class="panel"><div class="section-head"><h2>Now</h2><span id="status-pill" class="pill">IDLE</span></div><div id="now-card" class="empty">No dare is active. Start the referee and let chat dare you.</div><div class="actions"><button id="veto">Veto <kbd>V</kbd></button><button id="skip">Skip <kbd>S</kbd></button><button id="pause">Pause <kbd>P</kbd></button></div></section>
     <section class="panel"><h2>Queue <span id="queue-count" class="muted">0</span></h2><ol id="queue-list" class="list"></ol></section>
     <section class="panel"><h2>History</h2><div id="history-list" class="history empty">No completed dares yet.</div></section>
@@ -119,6 +120,11 @@ function render(state: State): void {
   const list = $('#queue-list');
   list.replaceChildren(...(state.queue.length ? state.queue.map((item) => { const li = document.createElement('li'); li.innerHTML = `<strong>#${item.id} · @${escapeHtml(item.viewerLogin)}</strong><span></span>`; li.querySelector('span')!.textContent = item.title; return li; }) : [Object.assign(document.createElement('li'), { textContent: 'Queue is empty.' })]));
   $('#pause').textContent = state.paused ? 'Resume' : 'Pause';
+  const hears = $('#ref-hears');
+  const transcript = state.lastTranscript;
+  hears.textContent = transcript?.text
+    ? `Ref hears: “${transcript.text}” · ${Math.floor(Math.max(0, Date.now() - transcript.at) / 1000)}s ago`
+    : 'Ref hears: nothing yet';
   void loadHistory();
 }
 
@@ -126,12 +132,18 @@ function renderCaptureStatus(): void {
   const node = $('#capture-status');
   const lastFrameAt = latestState?.lastFrameAt ?? null;
   if (!captureActive) {
-    node.innerHTML = '<span class="dot"></span><span>Referee idle</span><span>0 fps</span><span>— latency</span>';
+    const warning = localCaptureStatus?.watching && /^(Microphone blocked|No audio source)/.test(localCaptureStatus.message)
+      ? `<span class="audio-notice">${escapeHtml(localCaptureStatus.message)}</span>`
+      : '';
+    node.innerHTML = `<span class="dot"></span><span>Referee idle</span><span>0 fps</span><span>— latency</span>${warning}`;
     return;
   }
   const fps = localCaptureStatus?.watching ? `${localCaptureStatus.fps} fps` : 'remote frames';
   const latency = localCaptureStatus?.watching && localCaptureStatus.latencyMs !== null ? `${localCaptureStatus.latencyMs} ms latency` : lastFrameAt === null ? 'frame active' : `last frame ${Math.floor(Math.max(0, Date.now() - lastFrameAt) / 1000)}s ago`;
-  node.innerHTML = `<span class="dot on"></span><span>Referee receiving frames (from this or another tab)</span><span>${escapeHtml(fps)}</span><span>${escapeHtml(latency)}</span>`;
+  const audioNotice = localCaptureStatus?.watching && /^(Microphone blocked|No audio source)/.test(localCaptureStatus.message)
+    ? `<span class="audio-notice">${escapeHtml(localCaptureStatus.message)}</span>`
+    : '';
+  node.innerHTML = `<span class="dot on"></span><span>Referee receiving frames (from this or another tab)</span><span>${escapeHtml(fps)}</span><span>${escapeHtml(latency)}</span>${audioNotice}`;
 }
 
 async function loadRuntimeState(): Promise<void> {

@@ -14,21 +14,33 @@ export async function startCapture(onStatus: (status: CaptureStatus) => void): P
   let mic: MediaStream | null = null;
   let audioContext: AudioContext | null = null;
   let mixed: MediaStream | null = null;
-  const audioTracks = [...displayAudio];
-  if (!displayAudio.length) {
+  let microphoneBlocked = false;
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch { microphoneBlocked = true; }
+  const audioSources = [...displayAudio, ...(mic?.getAudioTracks() ?? [])];
+  let audioStream: MediaStream | null = null;
+  let audioStatusMessage = '';
+  if (audioSources.length) {
     try {
-      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioContext = new AudioContext();
       const destination = audioContext.createMediaStreamDestination();
-      audioContext.createMediaStreamSource(mic).connect(destination);
+      for (const track of audioSources) {
+        audioContext.createMediaStreamSource(new MediaStream([track])).connect(destination);
+      }
       mixed = destination.stream;
-      audioTracks.push(...mixed.getAudioTracks());
-    } catch { onStatus({ fps: 0, latencyMs: null, watching: true, message: 'Screen shared; microphone unavailable' }); }
+      audioStream = mixed;
+      await audioContext.resume().catch(() => undefined);
+    } catch {
+      audioStatusMessage = 'No audio source — audio dares will fail';
+    }
   }
+  if (!audioStream) audioStatusMessage = 'No audio source — audio dares will fail';
+  else if (microphoneBlocked) audioStatusMessage = 'Microphone blocked — audio dares will rely on system audio only';
   let active = true;
   let frames = 0;
   let frameStarted = Date.now();
-  const audioStream = audioTracks.length && typeof MediaRecorder !== 'undefined' ? new MediaStream(audioTracks) : null;
+  if (typeof MediaRecorder === 'undefined') audioStream = null;
   const audioMime = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
     : 'audio/webm';
@@ -87,12 +99,12 @@ export async function startCapture(onStatus: (status: CaptureStatus) => void): P
         const now = Date.now();
         const elapsed = now - frameStarted;
         const latency = Math.round(performance.now() - sentAt);
-        onStatus({ fps: elapsed >= 5000 ? Math.round(frames * 1000 / elapsed * 10) / 10 : 1, latencyMs: latency, watching: true, message: response.ok ? 'Referee watching' : 'Capture upload failed' });
+        onStatus({ fps: elapsed >= 5000 ? Math.round(frames * 1000 / elapsed * 10) / 10 : 1, latencyMs: latency, watching: true, message: audioStatusMessage || (response.ok ? 'Referee watching' : 'Capture upload failed') });
         if (elapsed >= 5000) { frames = 0; frameStarted = now; }
-      } catch { onStatus({ fps: 0, latencyMs: null, watching: active, message: 'Capture connection lost' }); }
+      } catch { onStatus({ fps: 0, latencyMs: null, watching: active, message: audioStatusMessage || 'Capture connection lost' }); }
     }, 'image/jpeg', 0.6);
   }, 1000);
   display.getVideoTracks()[0]?.addEventListener('ended', stop, { once: true });
-  onStatus({ fps: 0, latencyMs: null, watching: true, message: 'Referee watching' });
+  onStatus({ fps: 0, latencyMs: null, watching: true, message: audioStatusMessage || 'Referee watching' });
   return { stop };
 }
